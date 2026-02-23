@@ -1,0 +1,267 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────
+// AUTH & USER MANAGEMENT
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id                       String        @id @default(cuid())
+  email                    String        @unique
+  name                     String
+  emailVerified            Boolean       @default(false)
+  image                    String?
+  password                 String?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+  notifyLoginSelf          Boolean       @default(true)
+  notifySystemAnnouncement Boolean       @default(true)
+  notifyLoginAdmin         Boolean       @default(false)
+  sessions                 Session[]
+  accounts                 Account[]
+  userRoles                UserRole[]
+  uploadBatches            UploadBatch[]
+}
+
+enum RoleType {
+  ADMIN
+  AREA_MANAGER
+  BRANCH_MANAGER
+  CUSTOM
+}
+
+model Role {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  type            RoleType         @default(CUSTOM)
+  description     String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  userRoles       UserRole[]
+  pagePermissions PagePermission[]
+}
+
+model PagePermission {
+  id       String   @id @default(cuid())
+  roleId   String
+  resource String
+  actions  String[]
+  role     Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, resource])
+}
+
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  roleId    String
+  branchId  String?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  branch    Branch?  @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, roleId, branchId])
+}
+
+model Page {
+  id         String    @id @default(cuid())
+  resource   String    @unique
+  label      String
+  path       String
+  icon       String    @default("FileText")
+  navGroupId String?
+  navGroup   NavGroup? @relation(fields: [navGroupId], references: [id], onDelete: SetNull)
+  order      Int       @default(0)
+  isActive   Boolean   @default(true)
+}
+
+model NavGroup {
+  id    String @id @default(cuid())
+  name  String @unique   // e.g. "Admin", "Reports"
+  order Int    @default(0)
+  pages Page[]
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model Verification {
+  id         String    @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+}
+
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────
+// BUSINESS — LOCATIONS
+// ─────────────────────────────────────────────────────────────
+
+model Branch {
+  id            String        @id @default(cuid())
+  name          String        @unique
+  address       String?
+  location      String?
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  userRoles     UserRole[]
+  transactions  Transaction[]
+  uploadBatches UploadBatch[]
+}
+
+model Factory {
+  id           String        @id @default(cuid())
+  name         String        @unique
+  address      String?
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
+}
+
+// ─────────────────────────────────────────────────────────────
+// BUSINESS — PRODUCTS
+// ─────────────────────────────────────────────────────────────
+
+model ProductCategory {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  products  Product[]
+}
+
+model Product {
+  id           String          @id @default(cuid())
+  name         String
+  categoryId   String
+  unit         String          @default("pcs")
+  isActive     Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  category     ProductCategory @relation(fields: [categoryId], references: [id])
+  transactions Transaction[]
+
+  @@unique([name, categoryId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// BUSINESS — TRANSACTION TYPES
+// ─────────────────────────────────────────────────────────────
+
+model TransactionType {
+  id            String        @id @default(cuid())
+  name          String        @unique
+  description   String?
+  pairedWith    String?
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  transactions  Transaction[]
+  uploadBatches UploadBatch[]
+}
+
+// ─────────────────────────────────────────────────────────────
+// BUSINESS — TRANSACTIONS
+// ─────────────────────────────────────────────────────────────
+
+model Transaction {
+  id                String          @id @default(cuid())
+  sl                Int?
+  date              DateTime        @db.Date
+  branchId          String?
+  factoryId         String?
+  productId         String
+  transactionTypeId String
+  quantity          Decimal         @db.Decimal(10, 3)
+  price             Decimal         @db.Decimal(10, 2)
+  uploadId          String
+  createdAt         DateTime        @default(now())
+
+  branch          Branch?         @relation(fields: [branchId], references: [id])
+  factory         Factory?        @relation(fields: [factoryId], references: [id])
+  product         Product         @relation(fields: [productId], references: [id])
+  transactionType TransactionType @relation(fields: [transactionTypeId], references: [id])
+  upload          UploadBatch     @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  @@index([date, branchId, transactionTypeId])
+  @@index([date, factoryId, transactionTypeId])
+  @@index([date, transactionTypeId])
+  @@index([uploadId])
+  @@index([productId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// BUSINESS — UPLOAD BATCHES
+// ─────────────────────────────────────────────────────────────
+
+model UploadBatch {
+  id                String          @id @default(cuid())
+  filename          String
+  uploadedBy        String
+  uploadedAt        DateTime        @default(now())
+  rowCount          Int
+  successCount      Int             @default(0)
+  errorCount        Int             @default(0)
+  status            UploadStatus    @default(PENDING)
+  errorLog          String?
+  dateFrom          DateTime        @db.Date
+  dateTo            DateTime        @db.Date
+  transactionTypeId String
+  branchIds         String[]
+
+  transactions    Transaction[]
+  user            User            @relation(fields: [uploadedBy], references: [id])
+  transactionType TransactionType @relation(fields: [transactionTypeId], references: [id])
+  branch          Branch?         @relation(fields: [branchId], references: [id])
+  branchId        String?
+}
+
+enum UploadStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  PARTIAL
+  FAILED
+}

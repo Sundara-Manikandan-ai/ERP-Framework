@@ -1,0 +1,303 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+body {
+  @apply m-0;
+  background: linear-gradient(
+    135deg,
+    oklch(0.96 0.012 290) 0%,
+    oklch(0.95 0.010 280) 50%,
+    oklch(0.96 0.011 295) 100%
+  );
+  min-height: 100vh;
+  font-size: 12px;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
+    "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New", monospace;
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+:root {
+  --radius: 0.3rem;
+
+  --background:           oklch(0.965 0.008 290);
+  --foreground:           oklch(0.18  0.020 290);
+
+  --card:                 oklch(0.99  0.004 290 / 0.75);
+  --card-foreground:      oklch(0.18  0.020 290);
+
+  --popover:              oklch(0.99  0.004 290);
+  --popover-foreground:   oklch(0.18  0.020 290);
+
+  --primary:              oklch(0.48  0.16  290);
+  --primary-foreground:   oklch(0.99  0.004 290);
+
+  --secondary:            oklch(0.93  0.012 290);
+  --secondary-foreground: oklch(0.25  0.020 290);
+
+  --muted:                oklch(0.93  0.012 290);
+  --muted-foreground:     oklch(0.50  0.025 290);
+
+  --accent:               oklch(0.91  0.018 290);
+  --accent-foreground:    oklch(0.25  0.020 290);
+
+  --destructive:          oklch(0.577 0.245 27.325);
+
+  --border:               oklch(0.84  0.018 290);
+  --input:                oklch(0.88  0.014 290);
+  --ring:                 oklch(0.55  0.16  290);
+
+  --chart-1: oklch(0.52 0.18 290);
+  --chart-2: oklch(0.58 0.14 185);
+  --chart-3: oklch(0.54 0.14 150);
+  --chart-4: oklch(0.62 0.18 85);
+  --chart-5: oklch(0.58 0.20 25);
+
+  --sidebar:                    oklch(0.26 0.09 290);
+  --sidebar-foreground:         oklch(0.92 0.008 290);
+  --sidebar-primary:            oklch(0.62 0.18 290);
+  --sidebar-primary-foreground: oklch(0.98 0.005 290);
+  --sidebar-accent:             oklch(0.33 0.10 290);
+  --sidebar-accent-foreground:  oklch(0.95 0.008 290);
+  --sidebar-border:             oklch(0.36 0.09 290);
+  --sidebar-ring:               oklch(0.62 0.18 290);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  /* ── Sharp bold text ── */
+  .font-semibold,
+  .font-bold,
+  [data-slot="card-title"] {
+    letter-spacing: -0.01em;
+  }
+
+  /* ── Main content area ── */
+  main {
+    padding-top:   0.5rem !important;
+    padding-left:  0.5rem !important;
+    padding-right: 0.5rem !important;
+    /* bottom padding controlled per breakpoint in route.tsx — do NOT set here */
+  }
+
+  /* ── Glass card effect ── */
+  [data-slot="card"] {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid oklch(0.72 0.025 290 / 0.45);
+    box-shadow:
+      0 1px 6px oklch(0.48 0.16 290 / 0.05),
+      0 1px 2px oklch(0.48 0.16 290 / 0.07);
+    padding-top:    0.4rem !important;
+    padding-bottom: 0.4rem !important;
+    gap:            0 !important;
+  }
+
+  /* ── Card header ── */
+  [data-slot="card-header"] {
+    padding: 0.4rem 0.6rem 0.25rem !important;
+    gap:     0.15rem !important;
+  }
+
+  /* ── Card content ── */
+  [data-slot="card-content"] {
+    padding: 0.25rem 0.6rem 0.4rem !important;
+  }
+
+  /* ── Card footer ── */
+  [data-slot="card-footer"] {
+    padding: 0.25rem 0.6rem 0.4rem !important;
+  }
+
+  /* ── Card title & description ── */
+  [data-slot="card-title"] {
+    font-size:   0.8rem !important;
+    font-weight: 600    !important;
+    line-height: 1.2    !important;
+  }
+
+  [data-slot="card-description"] {
+    font-size:   0.68rem !important;
+    line-height: 1.3     !important;
+  }
+
+  /* ── Page headings ── */
+  .text-3xl { font-size: 0.95rem  !important; font-weight: 600 !important; }
+  .text-2xl { font-size: 0.875rem !important; font-weight: 600 !important; }
+  .text-xl  { font-size: 0.825rem !important; font-weight: 600 !important; }
+  .text-lg  { font-size: 0.8rem   !important; font-weight: 500 !important; }
+
+  /* ── Table — ultra-compact rows ── */
+  [data-slot="table-head"] {
+    height:         1.4rem  !important;
+    padding:        0.15rem 0.5rem !important;
+    font-size:      0.65rem !important;
+    font-weight:    600     !important;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  [data-slot="table-cell"] {
+    padding:     0.15rem 0.5rem !important;
+    font-size:   0.7rem  !important;
+    line-height: 1.3     !important;
+  }
+
+  /* ── Button ── */
+  [data-slot="button"][data-size="default"] {
+    height:        1.75rem !important;
+    padding-left:  0.65rem !important;
+    padding-right: 0.65rem !important;
+    font-size:     0.72rem !important;
+  }
+
+  [data-slot="button"][data-size="sm"] {
+    height:        1.5rem  !important;
+    padding-left:  0.5rem  !important;
+    padding-right: 0.5rem  !important;
+    font-size:     0.7rem  !important;
+  }
+
+  /* ── Input ── */
+  [data-slot="input"] {
+    height:         1.75rem !important;
+    font-size:      0.72rem !important;
+    padding-top:    0.2rem  !important;
+    padding-bottom: 0.2rem  !important;
+  }
+
+  /* ── Textarea ── */
+  [data-slot="textarea"] {
+    font-size:  0.72rem !important;
+    padding:    0.3rem 0.6rem !important;
+    min-height: 3.5rem  !important;
+  }
+
+  /* ── Select ── */
+  [data-slot="select-trigger"][data-size="default"] {
+    height:    1.75rem !important;
+    font-size: 0.72rem !important;
+  }
+
+  [data-slot="select-item"] {
+    font-size:      0.72rem !important;
+    padding-top:    0.2rem  !important;
+    padding-bottom: 0.2rem  !important;
+  }
+
+  /* ── Label ── */
+  [data-slot="label"] {
+    font-size: 0.7rem !important;
+  }
+
+  /* ── Badge ── */
+  [data-slot="badge"] {
+    font-size:   0.62rem !important;
+    padding:     0.1rem 0.35rem !important;
+    line-height: 1.4 !important;
+  }
+
+  /* ── Dialog ── */
+  [data-slot="dialog-content"] {
+    padding: 0.75rem !important;
+    gap:     0.6rem  !important;
+  }
+
+  [data-slot="dialog-header"] {
+    gap: 0.2rem !important;
+  }
+
+  [data-slot="dialog-title"] {
+    font-size: 0.85rem !important;
+  }
+
+  /* ── Alert dialog ── */
+  [data-slot="alert-dialog-content"] {
+    padding: 0.75rem !important;
+    gap:     0.6rem  !important;
+  }
+
+  [data-slot="alert-dialog-header"] {
+    gap: 0.2rem !important;
+  }
+
+  [data-slot="alert-dialog-title"] {
+    font-size: 0.85rem !important;
+  }
+
+  /* ── Dropdown menu ── */
+  [data-slot="dropdown-menu-item"] {
+    font-size:      0.7rem !important;
+    padding-top:    0.2rem !important;
+    padding-bottom: 0.2rem !important;
+  }
+
+  [data-slot="dropdown-menu-label"] {
+    font-size:      0.7rem !important;
+    padding-top:    0.2rem !important;
+    padding-bottom: 0.2rem !important;
+  }
+
+  /* ── Spacing utilities — scale down ── */
+  .space-y-4 > * + *   { margin-top: 0.5rem  !important; }
+  .space-y-3 > * + *   { margin-top: 0.35rem !important; }
+  .space-y-2 > * + *   { margin-top: 0.25rem !important; }
+  .space-y-1\.5 > * + * { margin-top: 0.2rem  !important; }
+}

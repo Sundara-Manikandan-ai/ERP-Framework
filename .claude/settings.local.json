@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__ide__getDiagnostics",
+      "Bash(\"C:/Program Files/Git/bin/git.exe\":*)",
+      "Bash(git config:*)",
+      "Bash(cd /d/mis/backup/proj/mis-enterprise && npm run seed 2>&1)",
+      "Bash(cd D:/mis/backup/proj/mis-enterprise && npm run seed 2>&1)",
+      "Bash(cd D:/mis/backup/proj/mis-enterprise && npx prisma generate 2>&1)"
+    ]
+  }
+}
