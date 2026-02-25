@@ -66,10 +66,11 @@ type PreviewRow = {
   date: string
   branch: string
   category: string
+  subcategory: string
   product: string
   unit: string
   quantity: number
-  price: number
+  value: number
   _rowIndex: number
   _error?: string
 }
@@ -144,10 +145,11 @@ const processUpload = createServerFn({ method: 'POST' })
         date: string
         branchName: string
         categoryName: string
+        subcategoryName: string
         productName: string
         unit: string
         quantity: number
-        price: number
+        value: number
       }[]
       replaceExisting: boolean
     }) => data
@@ -181,8 +183,9 @@ const processUpload = createServerFn({ method: 'POST' })
       })
 
       // ── Pre-fetch lookups in bulk ──
-      const uniqueCategoryNames = [...new Set(data.rows.map((r) => r.categoryName))]
-      const uniqueBranchNames   = [...new Set(data.rows.map((r) => r.branchName).filter(Boolean))]
+      const uniqueCategoryNames    = [...new Set(data.rows.map((r) => r.categoryName))]
+      const uniqueSubcategoryNames = [...new Set(data.rows.map((r) => r.subcategoryName))]
+      const uniqueBranchNames      = [...new Set(data.rows.map((r) => r.branchName).filter(Boolean))]
 
       const [existingCategories, existingBranches] = await Promise.all([
         tx.productCategory.findMany({ where: { name: { in: uniqueCategoryNames } } }),
@@ -194,7 +197,7 @@ const processUpload = createServerFn({ method: 'POST' })
       const categoryMap = new Map(existingCategories.map((c) => [c.name, c]))
       const branchMap   = new Map(existingBranches.map((b) => [b.name, b]))
 
-      // ── Bulk-create missing categories (one query) ──
+      // ── Bulk-create missing categories ──
       const missingCategoryNames = uniqueCategoryNames.filter((n) => !categoryMap.has(n))
       if (missingCategoryNames.length > 0) {
         await tx.productCategory.createMany({
@@ -207,36 +210,60 @@ const processUpload = createServerFn({ method: 'POST' })
         for (const c of newCategories) categoryMap.set(c.name, c)
       }
 
-      // ── Bulk-create missing products (one query) ──
-      // Collect all unique products needed across all rows
+      // ── Fetch existing subcategories ──
       const categoryIds = [...categoryMap.values()].map((c) => c.id)
-
-      const existingProducts = await tx.product.findMany({
+      const existingSubcategories = await tx.productSubcategory.findMany({
         where: { categoryId: { in: categoryIds } },
       })
-      const productMap = new Map(existingProducts.map((p) => [`${p.name}::${p.categoryId}`, p]))
+      const subcategoryMap = new Map(
+        existingSubcategories.map((s) => [`${s.name}::${s.categoryId}`, s])
+      )
 
-      // Identify products that don't exist yet
-      const missingProducts: { name: string; categoryId: string; unit: string }[] = []
+      // ── Bulk-create missing subcategories ──
+      const missingSubcategories: { name: string; categoryId: string }[] = []
       for (const row of data.rows) {
         const category = categoryMap.get(row.categoryName)
         if (!category) continue
-        const key = `${row.productName}::${category.id}`
-        if (!productMap.has(key)) {
-          missingProducts.push({ name: row.productName, categoryId: category.id, unit: row.unit || 'pcs' })
+        const key = `${row.subcategoryName}::${category.id}`
+        if (!subcategoryMap.has(key)) {
+          missingSubcategories.push({ name: row.subcategoryName, categoryId: category.id })
         }
       }
-
-      if (missingProducts.length > 0) {
-        await tx.product.createMany({ data: missingProducts, skipDuplicates: true })
-        // Re-fetch so productMap has the new ids
-        const newProducts = await tx.product.findMany({
+      if (missingSubcategories.length > 0) {
+        await tx.productSubcategory.createMany({ data: missingSubcategories, skipDuplicates: true })
+        const newSubcategories = await tx.productSubcategory.findMany({
           where: { categoryId: { in: categoryIds } },
         })
-        for (const p of newProducts) productMap.set(`${p.name}::${p.categoryId}`, p)
+        for (const s of newSubcategories) subcategoryMap.set(`${s.name}::${s.categoryId}`, s)
       }
 
-      // ── Process each row — transaction creates only, no more per-row product creates ──
+      // ── Bulk-create missing products ──
+      const subcategoryIds = [...subcategoryMap.values()].map((s) => s.id)
+      const existingProducts = await tx.product.findMany({
+        where: { subcategoryId: { in: subcategoryIds } },
+      })
+      const productMap = new Map(existingProducts.map((p) => [`${p.name}::${p.subcategoryId}`, p]))
+
+      const missingProducts: { name: string; subcategoryId: string; unit: string }[] = []
+      for (const row of data.rows) {
+        const category    = categoryMap.get(row.categoryName)
+        if (!category) continue
+        const subcategory = subcategoryMap.get(`${row.subcategoryName}::${category.id}`)
+        if (!subcategory) continue
+        const key = `${row.productName}::${subcategory.id}`
+        if (!productMap.has(key)) {
+          missingProducts.push({ name: row.productName, subcategoryId: subcategory.id, unit: row.unit || 'pcs' })
+        }
+      }
+      if (missingProducts.length > 0) {
+        await tx.product.createMany({ data: missingProducts, skipDuplicates: true })
+        const newProducts = await tx.product.findMany({
+          where: { subcategoryId: { in: subcategoryIds } },
+        })
+        for (const p of newProducts) productMap.set(`${p.name}::${p.subcategoryId}`, p)
+      }
+
+      // ── Process each row — transaction creates only ──
       const errors: { row: number; error: string }[] = []
       let successCount = 0
 
@@ -245,7 +272,10 @@ const processUpload = createServerFn({ method: 'POST' })
           const category = categoryMap.get(row.categoryName)
           if (!category) throw new Error(`Category not found: ${row.categoryName}`)
 
-          const product = productMap.get(`${row.productName}::${category.id}`)
+          const subcategory = subcategoryMap.get(`${row.subcategoryName}::${category.id}`)
+          if (!subcategory) throw new Error(`Subcategory not found: ${row.subcategoryName}`)
+
+          const product = productMap.get(`${row.productName}::${subcategory.id}`)
           if (!product) throw new Error(`Product not found: ${row.productName}`)
 
           // Resolve branch/factory
@@ -270,14 +300,14 @@ const processUpload = createServerFn({ method: 'POST' })
               productId: product.id,
               transactionTypeId: data.transactionTypeId,
               quantity: row.quantity,
-              price: row.price,
+              value: row.value,
               uploadId: batch.id,
             },
           })
 
           successCount++
-        } catch (e: any) {
-          errors.push({ row: row.sl ?? 0, error: e.message })
+        } catch (e: unknown) {
+          errors.push({ row: row.sl ?? 0, error: getErrorMessage(e) })
         }
       }
 
@@ -438,14 +468,15 @@ function UploadPage() {
           return -1
         }
 
-        const colSl       = col(['sl', 's.no', 'sno', 'serial'])
-        const colDate     = col(['date'])
-        const colBranch   = col(['branch'])
-        const colCategory = col(['category', 'cat'])
-        const colProduct  = col(['product', 'item', 'name'])
-        const colUnit     = col(['unit', 'uom'])
-        const colQty      = col(['qty', 'quantity', 'units'])
-        const colPrice    = col(['price', 'rate', 'value', 'amount'])
+        const colSl          = col(['sl', 's.no', 'sno', 'serial'])
+        const colDate        = col(['date'])
+        const colBranch      = col(['branch'])
+        const colCategory    = col(['category', 'cat'])
+        const colSubcategory = col(['subcategory', 'sub category', 'sub-category', 'subcat'])
+        const colProduct     = col(['product', 'item', 'name'])
+        const colUnit        = col(['unit', 'uom'])
+        const colQty         = col(['qty', 'quantity', 'units'])
+        const colValue       = col(['value', 'amount', 'total'])
 
         if (colProduct === -1) {
           setParseError('Could not find a "Product" or "Item" column in the file.')
@@ -458,18 +489,19 @@ function UploadPage() {
           const productVal = String(r[colProduct] ?? '').trim()
           if (!productVal) continue // skip blank rows
 
-          const qty = colQty !== -1 ? parseFloat(r[colQty]) : 0
-          const price = colPrice !== -1 ? parseFloat(r[colPrice]) : 0
+          const qty   = colQty   !== -1 ? parseFloat(r[colQty])   : 0
+          const value = colValue !== -1 ? parseFloat(r[colValue]) : 0
 
           rows.push({
             sl: colSl !== -1 ? Number(r[colSl]) || null : null,
             date: colDate !== -1 ? parseExcelDate(r[colDate]) : '',
             branch: colBranch !== -1 ? String(r[colBranch] ?? '').trim() : '',
             category: colCategory !== -1 ? String(r[colCategory] ?? '').trim() : 'General',
+            subcategory: colSubcategory !== -1 ? String(r[colSubcategory] ?? '').trim() : 'General',
             product: productVal,
             unit: colUnit !== -1 ? String(r[colUnit] ?? '').trim() : 'pcs',
-            quantity: isNaN(qty) ? 0 : qty,
-            price: isNaN(price) ? 0 : price,
+            quantity: isNaN(qty)   ? 0 : qty,
+            value:    isNaN(value) ? 0 : value,
             _rowIndex: i + 1,
             _error: (!productVal ? 'Missing product name' : undefined),
           })
@@ -489,8 +521,8 @@ function UploadPage() {
           if (!dateFrom) setDateFrom(dates[0])
           if (!dateTo) setDateTo(dates[dates.length - 1])
         }
-      } catch (err: any) {
-        setParseError(`Failed to parse file: ${err.message}`)
+      } catch (err: unknown) {
+        setParseError(`Failed to parse file: ${getErrorMessage(err)}`)
       }
     }
     reader.readAsArrayBuffer(f)
@@ -541,10 +573,11 @@ function UploadPage() {
             date: r.date,
             branchName: r.branch,
             categoryName: r.category || 'General',
+            subcategoryName: r.subcategory || 'General',
             productName: r.product,
             unit: r.unit,
             quantity: r.quantity,
-            price: r.price,
+            value: r.value,
           })),
           replaceExisting,
         },
@@ -553,12 +586,12 @@ function UploadPage() {
       setUploadResult(result)
       refresh()
       if (result.status === 'SUCCESS') clearFile()
-    } catch (e: any) {
+    } catch (e: unknown) {
       setUploadResult({
         status: 'FAILED',
         successCount: 0,
         errorCount: preview.length,
-        errors: [{ row: 0, error: e.message ?? 'Unknown error' }],
+        errors: [{ row: 0, error: getErrorMessage(e, 'Unknown error') }],
       })
     } finally {
       setUploading(false)
@@ -750,7 +783,7 @@ function UploadPage() {
           </CardTitle>
           <CardDescription>
             Upload an Excel (.xlsx, .xls) or CSV file. Expected columns: SL, Date, Branch,
-            Category, Product, Unit, Quantity, Price
+            Category, Subcategory, Product, Unit, Quantity, Value
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 pt-0 p-4">
@@ -853,10 +886,11 @@ function UploadPage() {
                     <TableHead>Date</TableHead>
                     <TableHead>Branch</TableHead>
                     <TableHead>Category</TableHead>
+                    <TableHead>Subcategory</TableHead>
                     <TableHead>Product</TableHead>
                     <TableHead>Unit</TableHead>
                     <TableHead className="text-right">Qty</TableHead>
-                    <TableHead className="text-right">Price</TableHead>
+                    <TableHead className="text-right">Value</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -879,13 +913,18 @@ function UploadPage() {
                           {row.category}
                         </Badge>
                       </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs font-normal">
+                          {row.subcategory}
+                        </Badge>
+                      </TableCell>
                       <TableCell className="font-medium text-sm">{row.product}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{row.unit}</TableCell>
                       <TableCell className="text-right text-sm">
                         {row.quantity.toLocaleString('en-IN')}
                       </TableCell>
                       <TableCell className="text-right text-sm">
-                        ₹{row.price.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        ₹{row.value.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -905,13 +944,16 @@ function UploadPage() {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <p className="font-medium text-sm">{row.product}</p>
-                    <Badge variant="secondary" className="text-xs shrink-0">{row.category}</Badge>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Badge variant="secondary" className="text-xs">{row.category}</Badge>
+                      <Badge variant="outline" className="text-xs">{row.subcategory}</Badge>
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-1 text-xs text-muted-foreground">
                     <span>Date: {row.date ? new Date(row.date).toLocaleDateString('en-IN') : '—'}</span>
                     <span>Branch: {row.branch || '—'}</span>
                     <span>Qty: {row.quantity} {row.unit}</span>
-                    <span>Price: ₹{row.price.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <span>Value: ₹{row.value.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                   </div>
                 </div>
               ))}

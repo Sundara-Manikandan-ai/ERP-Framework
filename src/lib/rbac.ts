@@ -59,6 +59,15 @@ export async function getUserAccess(userId: string): Promise<UserAccess> {
   }
 }
 
+// Extracts the access shape returned by getPageData server handlers
+export function extractAccess(context: { isAdmin: boolean; roles: UserAccess['roles']; permissions: UserAccess['permissions'] }) {
+  return {
+    isAdmin:     context.isAdmin,
+    roles:       context.roles,
+    permissions: context.permissions,
+  }
+}
+
 // Point-use helper for server handlers
 export function can(
   permissions: UserAccess['permissions'],

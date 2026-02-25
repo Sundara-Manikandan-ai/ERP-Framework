@@ -5,6 +5,10 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+export function getErrorMessage(e: unknown, fallback = 'Something went wrong.'): string {
+  return e instanceof Error ? e.message : fallback
+}
+
 export function getInitials(name: string) {
   return name
     .split(' ')

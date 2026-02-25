@@ -25,7 +25,9 @@ const getSessionWithAccess = createServerFn({ method: 'GET' })
       const map: Record<string, string> = {}
       for (const s of settings) map[s.key] = s.value
       appName = map['appName'] ?? 'MIS Enterprise'
-    } catch {}
+    } catch (e) {
+      console.warn('Failed to load app settings, using defaults:', e)
+    }
 
 const pages = await db.page.findMany({
       where:   { isActive: true },

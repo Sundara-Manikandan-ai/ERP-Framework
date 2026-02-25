@@ -165,25 +165,37 @@ model Factory {
 // ─────────────────────────────────────────────────────────────
 
 model ProductCategory {
-  id        String    @id @default(cuid())
-  name      String    @unique
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  products  Product[]
+  id            String               @id @default(cuid())
+  name          String               @unique
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  subcategories ProductSubcategory[]
+}
+
+model ProductSubcategory {
+  id         String          @id @default(cuid())
+  name       String
+  categoryId String
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  category   ProductCategory @relation(fields: [categoryId], references: [id])
+  products   Product[]
+
+  @@unique([name, categoryId])
 }
 
 model Product {
-  id           String          @id @default(cuid())
-  name         String
-  categoryId   String
-  unit         String          @default("pcs")
-  isActive     Boolean         @default(true)
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
-  category     ProductCategory @relation(fields: [categoryId], references: [id])
-  transactions Transaction[]
+  id              String             @id @default(cuid())
+  name            String
+  subcategoryId   String
+  unit            String             @default("pcs")
+  isActive        Boolean            @default(true)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  subcategory     ProductSubcategory @relation(fields: [subcategoryId], references: [id])
+  transactions    Transaction[]
 
-  @@unique([name, categoryId])
+  @@unique([name, subcategoryId])
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -215,7 +227,7 @@ model Transaction {
   productId         String
   transactionTypeId String
   quantity          Decimal         @db.Decimal(10, 3)
-  price             Decimal         @db.Decimal(10, 2)
+  value             Decimal         @db.Decimal(12, 2)
   uploadId          String
   createdAt         DateTime        @default(now())
 
@@ -249,7 +261,6 @@ model UploadBatch {
   dateFrom          DateTime        @db.Date
   dateTo            DateTime        @db.Date
   transactionTypeId String
-  branchIds         String[]
 
   transactions    Transaction[]
   user            User            @relation(fields: [uploadedBy], references: [id])

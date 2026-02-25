@@ -13,10 +13,11 @@ import {
   type VisibilityState,
 } from '@tanstack/react-table'
 import { db } from '#/lib/db'
-import { authMiddleware } from '#/middleware/auth'
 import { adminMiddleware } from '#/middleware/admin'
 import { resourceMiddleware } from '#/middleware/resource'
+import { extractAccess } from '#/lib/rbac'
 import { RoleGate } from '@/components/shared/RoleGate'
+import { getErrorMessage } from '@/lib/utils'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -111,28 +112,25 @@ const getPageData = createServerFn({ method: 'GET' })
 
     return {
       branches,
-      access: {
-        isAdmin:     context.isAdmin,
-        roles:       context.roles,
-        permissions: context.permissions,
-      },
+      access: extractAccess(context),
     }
   })
 
 const createBranch = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
-  .inputValidator((data: BranchInput) => data)
-  .handler(async ({ data }) => {
+  .inputValidator((data: BranchInput) => {
     const parsed = branchSchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
-
+    return parsed.data
+  })
+  .handler(async ({ data }) => {
     const existing = await db.branch.findFirst({
-      where: { name: { equals: parsed.data.name, mode: 'insensitive' } },
+      where: { name: { equals: data.name, mode: 'insensitive' } },
     })
     if (existing) throw new Error('A branch with this name already exists.')
 
     await db.branch.create({
-      data: { name: parsed.data.name, address: parsed.data.address ?? null },
+      data: { name: data.name, address: data.address ?? null },
     })
 
     return { success: true }
@@ -140,19 +138,20 @@ const createBranch = createServerFn({ method: 'POST' })
 
 const updateBranch = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
-  .inputValidator((data: BranchInput & { id: string }) => data)
-  .handler(async ({ data }) => {
+  .inputValidator((data: BranchInput & { id: string }) => {
     const parsed = branchSchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
-
+    return { ...parsed.data, id: data.id }
+  })
+  .handler(async ({ data }) => {
     const existing = await db.branch.findFirst({
-      where: { name: { equals: parsed.data.name, mode: 'insensitive' }, NOT: { id: data.id } },
+      where: { name: { equals: data.name, mode: 'insensitive' }, NOT: { id: data.id } },
     })
     if (existing) throw new Error('A branch with this name already exists.')
 
     await db.branch.update({
       where: { id: data.id },
-      data: { name: parsed.data.name, address: parsed.data.address ?? null },
+      data: { name: data.name, address: data.address ?? null },
     })
 
     return { success: true }
@@ -203,8 +202,8 @@ function CreateBranchDialog({ onSuccess }: { onSuccess: () => void }) {
       setOpen(false)
       setForm({ name: '', address: '' })
       onSuccess()
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to create branch.')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Failed to create branch.'))
     } finally {
       setIsPending(false)
     }
@@ -271,8 +270,8 @@ function EditBranchDialog({ branch, onSuccess }: { branch: BranchRow; onSuccess:
       await updateBranch({ data: { id: branch.id, name: form.name, address: form.address || undefined } })
       setOpen(false)
       onSuccess()
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to update branch.')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Failed to update branch.'))
     } finally {
       setIsPending(false)
     }
@@ -457,8 +456,8 @@ function BranchesPage() {
                           try {
                             await deleteBranch({ data: { id: branch.id } })
                             refresh()
-                          } catch (e: any) {
-                            setDeleteError(e.message ?? 'Failed to delete branch.')
+                          } catch (e: unknown) {
+                            setDeleteError(getErrorMessage(e, 'Failed to delete branch.'))
                           }
                         }}
                       >
@@ -631,8 +630,8 @@ function BranchesPage() {
                                     try {
                                       await deleteBranch({ data: { id: branch.id } })
                                       refresh()
-                                    } catch (e: any) {
-                                      setDeleteError(e.message ?? 'Failed to delete branch.')
+                                    } catch (e: unknown) {
+                                      setDeleteError(getErrorMessage(e, 'Failed to delete branch.'))
                                     }
                                   }}
                                 >

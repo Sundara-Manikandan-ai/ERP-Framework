@@ -14,6 +14,7 @@ import {
 import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
 import { resourceMiddleware } from '#/middleware/resource'
+import { extractAccess } from '#/lib/rbac'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
@@ -139,11 +140,7 @@ const getPageData = createServerFn({ method: 'GET' })
       roles,
       users,
       branches,
-      access: {
-        isAdmin:     context.isAdmin,
-        roles:       context.roles,
-        permissions: context.permissions,
-      },
+      access: extractAccess(context),
     }
   })
 
@@ -153,10 +150,12 @@ const createRole = createServerFn({ method: 'POST' })
     name: string
     description: string
     pagePermissions: PagePermission[]
-  }) => data)
-  .handler(async ({ data }) => {
+  }) => {
     const parsed = roleSchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
+    return { ...parsed.data, description: data.description, pagePermissions: data.pagePermissions }
+  })
+  .handler(async ({ data }) => {
 
     const existing = await db.role.findFirst({
       where: { name: { equals: data.name, mode: 'insensitive' } },
@@ -193,10 +192,12 @@ const updateRole = createServerFn({ method: 'POST' })
     name: string
     description: string
     pagePermissions: PagePermission[]
-  }) => data)
-  .handler(async ({ data }) => {
+  }) => {
     const parsed = roleSchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
+    return { ...parsed.data, id: data.id, description: data.description, pagePermissions: data.pagePermissions }
+  })
+  .handler(async ({ data }) => {
 
     const existing = await db.role.findFirst({
       where: { name: { equals: data.name, mode: 'insensitive' }, NOT: { id: data.id } },
@@ -387,8 +388,8 @@ function CreateRoleDialog({ onSuccess }: { onSuccess: () => void }) {
       setDescription('')
       setPagePermissions([])
       onSuccess()
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to create role.')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Failed to create role.'))
     } finally {
       setIsPending(false)
     }
@@ -477,8 +478,8 @@ function EditRoleDialog({
       await updateRole({ data: { id: role.id, name, description, pagePermissions } })
       setOpen(false)
       onSuccess()
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to update role.')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Failed to update role.'))
     } finally {
       setIsPending(false)
     }
@@ -561,8 +562,8 @@ function AssignRoleDialog({
       setRoleId('')
       setBranchId('none')
       onSuccess()
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to assign role.')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Failed to assign role.'))
     } finally {
       setIsPending(false)
     }

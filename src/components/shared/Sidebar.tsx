@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import type { UserAccess } from '#/lib/rbac'
-import { getIcon } from '@/routes/_layout/pages'
+import { getIcon } from '@/lib/icons'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

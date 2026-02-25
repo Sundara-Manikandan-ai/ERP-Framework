@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { db } from '#/lib/db'
-import { authMiddleware } from '#/middleware/auth'
+import { resourceMiddleware } from '#/middleware/resource'
 import { LayoutDashboard, Users, Shield, Activity } from 'lucide-react'
 import {
   Card,
@@ -11,29 +11,36 @@ import {
 } from '@/components/ui/card'
 
 const getDashboardStats = createServerFn({ method: 'GET' })
-  .middleware([authMiddleware])
+  .middleware([resourceMiddleware('dashboard')])
   .handler(async () => {
-    // Fetch counts + both roles in one round-trip
-    const [totalUsers, totalRoles, totalBranches, roles] = await Promise.all([
+    const [totalUsers, totalRoles, totalBranches, roleCounts] = await Promise.all([
       db.user.count(),
       db.role.count(),
       db.branch.count(),
-      db.role.findMany({
-        where: { name: { in: ['Admin', 'MIS'] } },
-        select: { id: true, name: true },
+      db.userRole.groupBy({
+        by: ['roleId'],
+        _count: { roleId: true },
+        where: { role: { name: { in: ['Admin', 'MIS'] } } },
       }),
     ])
 
-    const adminRole   = roles.find((r) => r.name === 'Admin')
-    const managerRole = roles.find((r) => r.name === 'MIS')
+    const roles = await db.role.findMany({
+      where: { name: { in: ['Admin', 'MIS'] } },
+      select: { id: true, name: true },
+    })
 
-    // Fetch user-role counts in parallel
-    const [admins, managers] = await Promise.all([
-      adminRole   ? db.userRole.count({ where: { roleId: adminRole.id } })   : Promise.resolve(0),
-      managerRole ? db.userRole.count({ where: { roleId: managerRole.id } }) : Promise.resolve(0),
-    ])
+    const countFor = (name: string) => {
+      const role = roles.find((r) => r.name === name)
+      return role ? (roleCounts.find((rc) => rc.roleId === role.id)?._count.roleId ?? 0) : 0
+    }
 
-    return { totalUsers, admins, managers, totalRoles, totalBranches }
+    return {
+      totalUsers,
+      totalRoles,
+      totalBranches,
+      admins:   countFor('Admin'),
+      managers: countFor('MIS'),
+    }
   })
 
 export const Route = createFileRoute('/_layout/')({
@@ -42,40 +49,14 @@ export const Route = createFileRoute('/_layout/')({
 })
 
 function DashboardPage() {
-  const { totalUsers, admins, managers, totalRoles, totalBranches } =
-    Route.useLoaderData()
+  const { totalUsers, admins, managers, totalRoles, totalBranches } = Route.useLoaderData()
 
   const stats = [
-    {
-      title: 'Total Users',
-      value: totalUsers,
-      icon: Users,
-      description: 'Registered accounts',
-    },
-    {
-      title: 'Admins',
-      value: admins,
-      icon: Shield,
-      description: 'Administrator accounts',
-    },
-    {
-      title: 'MIS Users',
-      value: managers,
-      icon: Activity,
-      description: 'MIS accounts',
-    },
-    {
-      title: 'Branches',
-      value: totalBranches,
-      icon: LayoutDashboard,
-      description: 'Active branches',
-    },
-    {
-      title: 'Roles',
-      value: totalRoles,
-      icon: Shield,
-      description: 'Defined roles',
-    },
+    { title: 'Total Users',  value: totalUsers,    icon: Users,          description: 'Registered accounts'    },
+    { title: 'Admins',       value: admins,         icon: Shield,         description: 'Administrator accounts' },
+    { title: 'MIS Users',    value: managers,       icon: Activity,       description: 'MIS accounts'           },
+    { title: 'Branches',     value: totalBranches,  icon: LayoutDashboard, description: 'Active branches'       },
+    { title: 'Roles',        value: totalRoles,     icon: Shield,         description: 'Defined roles'          },
   ]
 
   return (

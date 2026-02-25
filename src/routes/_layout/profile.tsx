@@ -1,8 +1,11 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
+import { getRequestHeaders } from '@tanstack/react-start/server'
 import { useState } from 'react'
 import { db } from '#/lib/db'
+import { auth } from '#/lib/auth'
 import { authMiddleware } from '#/middleware/auth'
+import { hashPassword, verifyPassword } from 'better-auth/crypto'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -18,7 +21,7 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Loader2, User, Lock, Shield } from 'lucide-react'
-import { getInitials } from '@/lib/utils'
+import { getInitials, getErrorMessage } from '@/lib/utils'
 import { z } from 'zod'
 
 // ── Validation ────────────────────────────────────────────────────────────────
@@ -59,20 +62,20 @@ const getPageData = createServerFn({ method: 'GET' })
 
 const updateProfile = createServerFn({ method: 'POST' })
   .middleware([authMiddleware])
-  .inputValidator((data: { name: string; email: string }) => data)
-  .handler(async ({ context, data }) => {
+  .inputValidator((data: { name: string; email: string }) => {
     const parsed = updateProfileSchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
-
-    // Check email not taken by another user
+    return parsed.data
+  })
+  .handler(async ({ context, data }) => {
     const existing = await db.user.findFirst({
-      where: { email: parsed.data.email, NOT: { id: context.user.id } },
+      where: { email: data.email, NOT: { id: context.user.id } },
     })
     if (existing) throw new Error('This email is already in use.')
 
     await db.user.update({
       where: { id: context.user.id },
-      data: { name: parsed.data.name, email: parsed.data.email },
+      data: { name: data.name, email: data.email },
     })
 
     return { success: true }
@@ -80,15 +83,12 @@ const updateProfile = createServerFn({ method: 'POST' })
 
 const updatePassword = createServerFn({ method: 'POST' })
   .middleware([authMiddleware])
-  .inputValidator(
-    (data: { currentPassword: string; newPassword: string; confirmPassword: string }) => data
-  )
-  .handler(async ({ context, data }) => {
+  .inputValidator((data: { currentPassword: string; newPassword: string; confirmPassword: string }) => {
     const parsed = updatePasswordSchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
-
-    const { hashPassword, verifyPassword } = await import('better-auth/crypto')
-
+    return parsed.data
+  })
+  .handler(async ({ context, data }) => {
     const account = await db.account.findFirst({
       where: { userId: context.user.id, providerId: 'credential' },
     })
@@ -96,11 +96,11 @@ const updatePassword = createServerFn({ method: 'POST' })
 
     const valid = await verifyPassword({
       hash: account.password,
-      password: parsed.data.currentPassword,
+      password: data.currentPassword,
     })
     if (!valid) throw new Error('Current password is incorrect.')
 
-    const hashed = await hashPassword(parsed.data.newPassword)
+    const hashed = await hashPassword(data.newPassword)
 
     await db.account.update({
       where: { id: account.id },
@@ -108,8 +108,6 @@ const updatePassword = createServerFn({ method: 'POST' })
     })
 
     // Invalidate all other sessions for this user
-    const { getRequestHeaders } = await import('@tanstack/react-start/server')
-    const { auth } = await import('#/lib/auth')
     const headers = getRequestHeaders()
     const currentSession = await auth.api.getSession({ headers })
     if (currentSession) {
@@ -164,8 +162,8 @@ function ProfilePage() {
       await updateProfile({ data: profileForm })
       setProfileSuccess(true)
       router.invalidate()
-    } catch (e: any) {
-      setProfileError(e.message ?? 'Failed to update profile.')
+    } catch (e: unknown) {
+      setProfileError(getErrorMessage(e, 'Failed to update profile.'))
     } finally {
       setProfilePending(false)
     }
@@ -179,8 +177,8 @@ function ProfilePage() {
       await updatePassword({ data: passwordForm })
       setPasswordSuccess(true)
       setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' })
-    } catch (e: any) {
-      setPasswordError(e.message ?? 'Failed to update password.')
+    } catch (e: unknown) {
+      setPasswordError(getErrorMessage(e, 'Failed to update password.'))
     } finally {
       setPasswordPending(false)
     }

@@ -13,12 +13,12 @@ import {
 } from '@tanstack/react-table'
 import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
-import { authMiddleware } from '#/middleware/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
+import { Separator } from '@/components/ui/separator'
 import {
   Card,
   CardContent,
@@ -76,63 +76,11 @@ import {
   ArrowDown,
   ChevronLeft,
   ChevronRight,
-  LayoutDashboard,
-  Users,
-  Building2,
-  Shield,
-  Upload,
-  Settings,
-  UserCircle,
-  Layout,
-  FileText,
-  BarChart2,
-  ShoppingCart,
-  Package,
-  Truck,
-  ClipboardList,
-  Bell,
-  Lock,
-  Globe,
-  Mail,
-  Calendar,
-  Map,
-  Tag,
-  Layers,
-  type LucideIcon,
 } from 'lucide-react'
 import { z } from 'zod'
-import { cn } from '@/lib/utils'
-
-// ── Icon registry ─────────────────────────────────────────────────────────────
-
-const ICON_OPTIONS: { name: string; icon: LucideIcon }[] = [
-  { name: 'LayoutDashboard', icon: LayoutDashboard },
-  { name: 'Users',           icon: Users           },
-  { name: 'UserCircle',      icon: UserCircle      },
-  { name: 'Building2',       icon: Building2       },
-  { name: 'Shield',          icon: Shield          },
-  { name: 'Upload',          icon: Upload          },
-  { name: 'Settings',        icon: Settings        },
-  { name: 'Layout',          icon: Layout          },
-  { name: 'FileText',        icon: FileText        },
-  { name: 'BarChart2',       icon: BarChart2       },
-  { name: 'ShoppingCart',    icon: ShoppingCart    },
-  { name: 'Package',         icon: Package         },
-  { name: 'Truck',           icon: Truck           },
-  { name: 'ClipboardList',   icon: ClipboardList   },
-  { name: 'Bell',            icon: Bell            },
-  { name: 'Lock',            icon: Lock            },
-  { name: 'Globe',           icon: Globe           },
-  { name: 'Mail',            icon: Mail            },
-  { name: 'Calendar',        icon: Calendar        },
-  { name: 'Map',             icon: Map             },
-  { name: 'Tag',             icon: Tag             },
-  { name: 'Layers',          icon: Layers          },
-]
-
-export function getIcon(name: string): LucideIcon {
-  return ICON_OPTIONS.find((o) => o.name === name)?.icon ?? FileText
-}
+import { cn, getErrorMessage } from '@/lib/utils'
+import { ICON_OPTIONS, getIcon } from '@/lib/icons'
+import { resourceMiddleware } from '#/middleware/resource'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -173,7 +121,7 @@ type PageInput = z.infer<typeof pageSchema>
 // ── Server Functions ──────────────────────────────────────────────────────────
 
 const getPageData = createServerFn({ method: 'GET' })
-  .middleware([authMiddleware])
+  .middleware([resourceMiddleware('pages')])
   .handler(async () => {
     const [pages, roles, navGroups] = await Promise.all([
       db.page.findMany({
@@ -191,32 +139,34 @@ const getPageData = createServerFn({ method: 'GET' })
 
 const createPage = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
-  .inputValidator((data: PageInput) => data)
-  .handler(async ({ data }) => {
+  .inputValidator((data: PageInput) => {
     const parsed = pageSchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
-
-    const existing = await db.page.findUnique({ where: { resource: parsed.data.resource } })
+    return parsed.data
+  })
+  .handler(async ({ data }) => {
+    const existing = await db.page.findUnique({ where: { resource: data.resource } })
     if (existing) throw new Error('A page with this resource key already exists.')
 
-    const { navGroupId, ...rest } = parsed.data
+    const { navGroupId, ...rest } = data
     await db.page.create({ data: { ...rest, navGroupId: navGroupId || null } })
     return { success: true }
   })
 
 const updatePage = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
-  .inputValidator((data: PageInput & { id: string }) => data)
-  .handler(async ({ data }) => {
+  .inputValidator((data: PageInput & { id: string }) => {
     const parsed = pageSchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
-
+    return { ...parsed.data, id: data.id }
+  })
+  .handler(async ({ data }) => {
     const existing = await db.page.findFirst({
-      where: { resource: parsed.data.resource, NOT: { id: data.id } },
+      where: { resource: data.resource, NOT: { id: data.id } },
     })
     if (existing) throw new Error('Another page with this resource key already exists.')
 
-    const { navGroupId, ...rest } = parsed.data
+    const { navGroupId, ...rest } = data
     await db.page.update({ where: { id: data.id }, data: { ...rest, navGroupId: navGroupId || null } })
     return { success: true }
   })
@@ -352,8 +302,8 @@ function PageForm({
       setNgDialogOpen(false)
       setNgName('')
       setNgOrder(0)
-    } catch (e: any) {
-      setNgError(e.message ?? 'Failed to create nav group.')
+    } catch (e: unknown) {
+      setNgError(getErrorMessage(e, 'Failed to create nav group.'))
     } finally {
       setNgPending(false)
     }
@@ -497,6 +447,253 @@ function PageForm({
   )
 }
 
+// ── Manage Groups Dialog ──────────────────────────────────────────────────────
+
+function ManageGroupsDialog({
+  navGroups: initialGroups,
+  onSuccess,
+}: {
+  navGroups: NavGroupOption[]
+  onSuccess: () => void
+}) {
+  const [open, setOpen]           = useState(false)
+  const [groups, setGroups]       = useState(initialGroups)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName]   = useState('')
+  const [editOrder, setEditOrder] = useState(0)
+  const [editError, setEditError] = useState<string | null>(null)
+  const [editPending, setEditPending] = useState(false)
+
+  const [newName, setNewName]   = useState('')
+  const [newOrder, setNewOrder] = useState(0)
+  const [newError, setNewError] = useState<string | null>(null)
+  const [newPending, setNewPending] = useState(false)
+
+  // Keep local groups in sync when dialog opens
+  function handleOpenChange(v: boolean) {
+    if (v) setGroups(initialGroups)
+    setOpen(v)
+    setEditingId(null)
+    setEditError(null)
+    setNewError(null)
+  }
+
+  async function handleCreate() {
+    if (!newName.trim()) { setNewError('Name is required.'); return }
+    setNewError(null)
+    setNewPending(true)
+    try {
+      const ng = await createNavGroup({ data: { name: newName.trim(), order: newOrder } })
+      setGroups((prev) => [...prev, ng])
+      setNewName('')
+      setNewOrder(0)
+      onSuccess()
+    } catch (e: unknown) {
+      setNewError(getErrorMessage(e, 'Failed to create group.'))
+    } finally {
+      setNewPending(false)
+    }
+  }
+
+  function startEdit(ng: NavGroupOption) {
+    setEditingId(ng.id)
+    setEditName(ng.name)
+    setEditOrder(ng.order)
+    setEditError(null)
+  }
+
+  async function handleSaveEdit() {
+    if (!editName.trim()) { setEditError('Name is required.'); return }
+    setEditError(null)
+    setEditPending(true)
+    try {
+      await updateNavGroup({ data: { id: editingId!, name: editName.trim(), order: editOrder } })
+      setGroups((prev) =>
+        prev.map((g) => g.id === editingId ? { ...g, name: editName.trim(), order: editOrder } : g)
+      )
+      setEditingId(null)
+      onSuccess()
+    } catch (e: unknown) {
+      setEditError(getErrorMessage(e, 'Failed to update group.'))
+    } finally {
+      setEditPending(false)
+    }
+  }
+
+  async function handleDelete(id: string) {
+    try {
+      await deleteNavGroup({ data: { id } })
+      setGroups((prev) => prev.filter((g) => g.id !== id))
+      onSuccess()
+    } catch (e: unknown) {
+      setEditError(getErrorMessage(e, 'Failed to delete group.'))
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" className="min-w-0 flex-1 sm:flex-none text-xs sm:text-sm px-2 sm:px-3">
+          <FolderOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5 shrink-0" />
+          <span className="hidden sm:inline">Manage Groups</span>
+          <span className="sm:hidden">Groups</span>
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Manage Nav Groups</DialogTitle>
+          <DialogDescription>
+            Create, rename or delete sidebar groups. Deleting a group moves its pages to top-level.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          {/* Existing groups */}
+          <div className="space-y-2">
+            {groups.length === 0 && (
+              <p className="text-sm text-muted-foreground text-center py-4">No groups yet.</p>
+            )}
+            {groups.map((ng) => (
+              <div key={ng.id} className="rounded-md border bg-card p-2.5 space-y-2">
+                {editingId === ng.id ? (
+                  <>
+                    {editError && (
+                      <Alert variant="destructive">
+                        <AlertDescription>{editError}</AlertDescription>
+                      </Alert>
+                    )}
+                    <div className="grid grid-cols-[1fr_auto] gap-2">
+                      <Input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        placeholder="Group name"
+                        className="h-8 text-sm"
+                      />
+                      <Input
+                        type="number"
+                        value={editOrder}
+                        onChange={(e) => setEditOrder(parseInt(e.target.value) || 0)}
+                        className="h-8 text-sm w-16"
+                        placeholder="Order"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        className="flex-1 h-7 text-xs"
+                        onClick={handleSaveEdit}
+                        disabled={editPending}
+                      >
+                        {editPending
+                          ? <Loader2 className="w-3 h-3 animate-spin" />
+                          : <><Check className="w-3 h-3 mr-1" />Save</>
+                        }
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs"
+                        onClick={() => setEditingId(null)}
+                      >
+                        <X className="w-3 h-3 mr-1" />Cancel
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FolderOpen className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                      <span className="text-sm font-medium truncate">{ng.name}</span>
+                      <span className="text-xs text-muted-foreground shrink-0">#{ng.order}</span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                        onClick={() => startEdit(ng)}
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete Group</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              Delete <strong>{ng.name}</strong>? Pages in this group will become top-level sidebar items.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              className="bg-destructive text-white hover:bg-destructive/90"
+                              onClick={() => handleDelete(ng.id)}
+                            >
+                              Delete
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <Separator />
+
+          {/* Create new group */}
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              New Group
+            </Label>
+            {newError && (
+              <Alert variant="destructive">
+                <AlertDescription>{newError}</AlertDescription>
+              </Alert>
+            )}
+            <div className="grid grid-cols-[1fr_auto] gap-2">
+              <Input
+                placeholder="Group name e.g. Reports"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                className="h-8 text-sm"
+              />
+              <Input
+                type="number"
+                value={newOrder}
+                onChange={(e) => setNewOrder(parseInt(e.target.value) || 0)}
+                className="h-8 text-sm w-16"
+                placeholder="Order"
+              />
+            </div>
+            <Button
+              className="w-full"
+              size="sm"
+              onClick={handleCreate}
+              disabled={newPending}
+            >
+              {newPending
+                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Creating...</>
+                : <><PlusCircle className="w-4 h-4 mr-2" />Create Group</>
+              }
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
 // ── Create Dialog ─────────────────────────────────────────────────────────────
 
 function CreatePageDialog({
@@ -527,8 +724,8 @@ function CreatePageDialog({
       await createPage({ data })
       setOpen(false)
       onSuccess()
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to create page.')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Failed to create page.'))
     } finally {
       setIsPending(false)
     }
@@ -593,8 +790,8 @@ function EditPageDialog({
       await updatePage({ data: { ...data, id: page.id } })
       setOpen(false)
       onSuccess()
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to update page.')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Failed to update page.'))
     } finally {
       setIsPending(false)
     }
@@ -818,7 +1015,10 @@ function PagesPage() {
           <h1 className="text-3xl font-bold tracking-tight">Pages</h1>
           <p className="text-muted-foreground">Manage pages, paths and role access</p>
         </div>
-        <CreatePageDialog onSuccess={refresh} navGroups={navGroups} />
+        <div className="flex items-center gap-2">
+          <ManageGroupsDialog navGroups={navGroups} onSuccess={refresh} />
+          <CreatePageDialog onSuccess={refresh} navGroups={navGroups} />
+        </div>
       </div>
 
       <Card>

@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import type { Branch, Role } from '@prisma/client'
 import { db } from '../src/lib/db.js'
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
@@ -32,7 +33,7 @@ async function main() {
   // 1. BRANCHES
   // ─────────────────────────────────────────────────────────────
   const branchNames = ['Aranmanai', 'Kenikarai', 'Bharathinagar 1']
-  const branchMap: Record<string, any> = {}
+  const branchMap: Record<string, Branch> = {}
   await Promise.all(
     branchNames.map(async (name) => {
       branchMap[name] = await db.branch.upsert({
@@ -153,12 +154,12 @@ async function main() {
     {
       name: 'Basic User',
       type: 'CUSTOM',
-      description: 'Default role for new users — dashboard and profile only',
-      pagePermissions: [...viewOnly('dashboard', 'profile')],
+      description: 'Default role for new users — profile only',
+      pagePermissions: [...viewOnly('profile')],
     },
   ]
 
-  const roleMap: Record<string, any> = {}
+  const roleMap: Record<string, Role> = {}
 
   for (const def of roleDefs) {
     const role = await db.role.upsert({
@@ -183,33 +184,25 @@ async function main() {
   // ─────────────────────────────────────────────────────────────
   // 6a. NAV GROUPS
   // ─────────────────────────────────────────────────────────────
-  const navGroupDefs = [
-    { name: 'top',    order: 0 },
-    { name: 'admin',  order: 1 },
-    { name: 'bottom', order: 2 },
-  ]
-  const navGroupMap: Record<string, { id: string }> = {}
-  for (const ng of navGroupDefs) {
-    navGroupMap[ng.name] = await db.navGroup.upsert({
-      where:  { name: ng.name },
-      update: { order: ng.order },
-      create: ng,
-    })
-  }
-  console.log(`  ${navGroupDefs.length} nav groups`)
+  // Delete the old wrong nav groups if they exist
+  await db.page.updateMany({ data: { navGroupId: null } })
+  await db.navGroup.deleteMany({})
+
+  const adminGroup = await db.navGroup.create({ data: { name: 'Admin', order: 0 } })
+  console.log('  1 nav group (Admin)')
 
   // ─────────────────────────────────────────────────────────────
   // 6b. PAGES
   // ─────────────────────────────────────────────────────────────
   const pageDefs = [
-    { resource: 'dashboard', label: 'Dashboard', path: '/',         icon: 'LayoutDashboard', navGroupId: navGroupMap['top'].id,    order: 0 },
-    { resource: 'profile',   label: 'Profile',   path: '/profile',  icon: 'UserCircle',      navGroupId: navGroupMap['bottom'].id, order: 1 },
-    { resource: 'users',     label: 'Users',     path: '/users',    icon: 'Users',           navGroupId: navGroupMap['admin'].id,  order: 2 },
-    { resource: 'branches',  label: 'Branches',  path: '/branches', icon: 'Building2',       navGroupId: navGroupMap['admin'].id,  order: 3 },
-    { resource: 'roles',     label: 'Roles',     path: '/roles',    icon: 'Shield',          navGroupId: navGroupMap['admin'].id,  order: 4 },
-    { resource: 'pages',     label: 'Pages',     path: '/pages',    icon: 'Layout',          navGroupId: navGroupMap['admin'].id,  order: 5 },
-    { resource: 'upload',    label: 'Upload',    path: '/upload',   icon: 'Upload',          navGroupId: navGroupMap['admin'].id,  order: 6 },
-    { resource: 'settings',  label: 'Settings',  path: '/settings', icon: 'Settings',        navGroupId: navGroupMap['bottom'].id, order: 7 },
+    { resource: 'dashboard', label: 'Dashboard', path: '/',         icon: 'LayoutDashboard', navGroupId: null,          order: 0 },
+    { resource: 'profile',   label: 'Profile',   path: '/profile',  icon: 'UserCircle',      navGroupId: null,          order: 7 },
+    { resource: 'users',     label: 'Users',     path: '/users',    icon: 'Users',           navGroupId: adminGroup.id, order: 1 },
+    { resource: 'branches',  label: 'Branches',  path: '/branches', icon: 'Building2',       navGroupId: adminGroup.id, order: 2 },
+    { resource: 'roles',     label: 'Roles',     path: '/roles',    icon: 'Shield',          navGroupId: adminGroup.id, order: 3 },
+    { resource: 'pages',     label: 'Pages',     path: '/pages',    icon: 'Layout',          navGroupId: adminGroup.id, order: 4 },
+    { resource: 'upload',    label: 'Upload',    path: '/upload',   icon: 'Upload',          navGroupId: adminGroup.id, order: 5 },
+    { resource: 'settings',  label: 'Settings',  path: '/settings', icon: 'Settings',        navGroupId: null,          order: 8 },
   ]
 
   for (const page of pageDefs) {
@@ -223,7 +216,7 @@ async function main() {
   console.log(`  ${pageDefs.length} pages`)
 
   // ─────────────────────────────────────────────────────────────
-  // 7. APP SETTINGS
+  // 7. APP SETTINGSy
   // ─────────────────────────────────────────────────────────────
   await Promise.all([
     db.appSetting.upsert({ where: { key: 'appName' },  update: {}, create: { key: 'appName',  value: 'MIS Enterprise' } }),
@@ -235,19 +228,25 @@ async function main() {
   // 8. ADMIN USER (via Better Auth)
   // ─────────────────────────────────────────────────────────────
   const { auth } = await import('../src/lib/auth.js')
+  const { hashPassword } = await import('better-auth/crypto')
 
-  const existing = await db.user.findUnique({ where: { email: 'admin@mis.com' } })
-  if (existing) {
-    await db.user.delete({ where: { email: 'admin@mis.com' } })
-    console.log('  Deleted old admin user, recreating...')
+  let adminUser = await db.user.findUnique({ where: { email: 'admin@mis.com' } })
+
+  if (!adminUser) {
+    await auth.api.signUpEmail({
+      body: { name: 'System Admin', email: 'admin@mis.com', password: ADMIN_PASSWORD! },
+    })
+    adminUser = await db.user.findUnique({ where: { email: 'admin@mis.com' } })
+    if (!adminUser) throw new Error('Failed to create admin user via Better Auth.')
+  } else {
+    // Update password without destroying existing sessions
+    const hashed = await hashPassword(ADMIN_PASSWORD!)
+    await db.account.updateMany({
+      where: { userId: adminUser.id, providerId: 'credential' },
+      data:  { password: hashed },
+    })
+    console.log('  Admin user already exists — password updated.')
   }
-
-  await auth.api.signUpEmail({
-    body: { name: 'System Admin', email: 'admin@mis.com', password: ADMIN_PASSWORD! },
-  })
-
-  const adminUser = await db.user.findUnique({ where: { email: 'admin@mis.com' } })
-  if (!adminUser) throw new Error('Failed to create admin user via Better Auth.')
 
   const existingUserRole = await db.userRole.findFirst({
     where: { userId: adminUser.id, roleId: roleMap['Admin'].id, branchId: null },

@@ -13,11 +13,12 @@ import {
   type VisibilityState,
 } from '@tanstack/react-table'
 import { db } from '#/lib/db'
-import { authMiddleware } from '#/middleware/auth'
 import { adminMiddleware } from '#/middleware/admin'
 import { resourceMiddleware } from '#/middleware/resource'
+import { extractAccess } from '#/lib/rbac'
 import { createUserSchema, type CreateUserInput } from '#/lib/user'
 import { RoleGate } from '@/components/shared/RoleGate'
+import { getErrorMessage } from '@/lib/utils'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -116,35 +117,32 @@ const getPageData = createServerFn({ method: 'GET' })
       users,
       roles,
       branches,
-      access: {
-        isAdmin:     context.isAdmin,
-        roles:       context.roles,
-        permissions: context.permissions,
-      },
+      access: extractAccess(context),
     }
   })
 
 const createUser = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
-  .inputValidator((data: CreateUserInput) => data)
-  .handler(async ({ data }) => {
+  .inputValidator((data: CreateUserInput) => {
     const parsed = createUserSchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
-
-    const existing = await db.user.findUnique({ where: { email: parsed.data.email } })
+    return parsed.data
+  })
+  .handler(async ({ data }) => {
+    const existing = await db.user.findUnique({ where: { email: data.email } })
     if (existing) throw new Error('A user with this email already exists.')
 
-    const role = await db.role.findUnique({ where: { name: parsed.data.role } })
+    const role = await db.role.findUnique({ where: { name: data.role } })
     if (!role) throw new Error('Role not found.')
 
     const { hashPassword } = await import('better-auth/crypto')
-    const hashedPassword = await hashPassword(parsed.data.password)
+    const hashedPassword = await hashPassword(data.password)
 
     await db.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
-          name:          parsed.data.name,
-          email:         parsed.data.email,
+          name:          data.name,
+          email:         data.email,
           emailVerified: false,
         },
       })
@@ -165,7 +163,7 @@ const createUser = createServerFn({ method: 'POST' })
         data: {
           userId:   user.id,
           roleId:   role.id,
-          branchId: parsed.data.branchId ?? null,
+          branchId: data.branchId ?? null,
         },
       })
     })
@@ -245,8 +243,8 @@ function CreateUserDialog({
       setOpen(false)
       setForm({ name: '', email: '', password: '', role: '', branchId: 'none' })
       onSuccess()
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to create user.')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Failed to create user.'))
     } finally {
       setIsPending(false)
     }
@@ -364,8 +362,8 @@ function UpdateRoleDialog({
       })
       setOpen(false)
       onSuccess()
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to update role.')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Failed to update role.'))
     } finally {
       setIsPending(false)
     }
