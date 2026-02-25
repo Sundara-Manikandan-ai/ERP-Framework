@@ -263,53 +263,71 @@ const processUpload = createServerFn({ method: 'POST' })
         for (const p of newProducts) productMap.set(`${p.name}::${p.subcategoryId}`, p)
       }
 
-      // ── Process each row — transaction creates only ──
+      // ── Resolve each row individually — collect errors, build valid rows list ──
       const errors: { row: number; error: string }[] = []
-      let successCount = 0
+      const validRows: {
+        sl: number | null
+        date: Date
+        branchId: string | null
+        factoryId: string | null
+        productId: string
+        transactionTypeId: string
+        quantity: number
+        value: number
+        uploadId: string
+      }[] = []
 
       for (const row of data.rows) {
-        try {
-          const category = categoryMap.get(row.categoryName)
-          if (!category) throw new Error(`Category not found: ${row.categoryName}`)
-
-          const subcategory = subcategoryMap.get(`${row.subcategoryName}::${category.id}`)
-          if (!subcategory) throw new Error(`Subcategory not found: ${row.subcategoryName}`)
-
-          const product = productMap.get(`${row.productName}::${subcategory.id}`)
-          if (!product) throw new Error(`Product not found: ${row.productName}`)
-
-          // Resolve branch/factory
-          let branchId:  string | null = null
-          let factoryId: string | null = null
-
-          if (data.branchId) {
-            branchId = data.branchId
-          } else if (data.factoryId) {
-            factoryId = data.factoryId
-          } else if (row.branchName) {
-            const branch = branchMap.get(row.branchName)
-            if (branch) branchId = branch.id
-          }
-
-          await tx.transaction.create({
-            data: {
-              sl: row.sl,
-              date: new Date(row.date),
-              branchId,
-              factoryId,
-              productId: product.id,
-              transactionTypeId: data.transactionTypeId,
-              quantity: row.quantity,
-              value: row.value,
-              uploadId: batch.id,
-            },
-          })
-
-          successCount++
-        } catch (e: unknown) {
-          errors.push({ row: row.sl ?? 0, error: getErrorMessage(e) })
+        const category = categoryMap.get(row.categoryName)
+        if (!category) {
+          errors.push({ row: row.sl ?? 0, error: `Category not found: ${row.categoryName}` })
+          continue
         }
+
+        const subcategory = subcategoryMap.get(`${row.subcategoryName}::${category.id}`)
+        if (!subcategory) {
+          errors.push({ row: row.sl ?? 0, error: `Subcategory not found: ${row.subcategoryName}` })
+          continue
+        }
+
+        const product = productMap.get(`${row.productName}::${subcategory.id}`)
+        if (!product) {
+          errors.push({ row: row.sl ?? 0, error: `Product not found: ${row.productName}` })
+          continue
+        }
+
+        // Resolve branch/factory
+        let branchId:  string | null = null
+        let factoryId: string | null = null
+
+        if (data.branchId) {
+          branchId = data.branchId
+        } else if (data.factoryId) {
+          factoryId = data.factoryId
+        } else if (row.branchName) {
+          const branch = branchMap.get(row.branchName)
+          if (branch) branchId = branch.id
+        }
+
+        validRows.push({
+          sl: row.sl,
+          date: new Date(row.date),
+          branchId,
+          factoryId,
+          productId: product.id,
+          transactionTypeId: data.transactionTypeId,
+          quantity: row.quantity,
+          value: row.value,
+          uploadId: batch.id,
+        })
       }
+
+      // ── Insert all valid rows in a single query ──
+      if (validRows.length > 0) {
+        await tx.transaction.createMany({ data: validRows })
+      }
+
+      const successCount = validRows.length
 
       // ── Update batch status ──
       const status =
