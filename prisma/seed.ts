@@ -8,7 +8,7 @@ if (!ADMIN_PASSWORD) {
   process.exit(1)
 }
 
-const ALL_RESOURCES = ['dashboard', 'profile', 'settings', 'users', 'branches', 'roles', 'pages', 'upload'] as const
+const ALL_RESOURCES = ['dashboard', 'profile', 'settings', 'users', 'branches', 'roles', 'pages', 'upload', 'products', 'factories', 'transactionTypes', 'reports'] as const
 type Resource = typeof ALL_RESOURCES[number]
 
 function viewOnly(...resources: Resource[]) {
@@ -110,21 +110,22 @@ async function main() {
       name: 'Area Manager',
       type: 'AREA_MANAGER',
       description: 'Multi-branch access with aggregated reporting',
-      pagePermissions: [...viewOnly('dashboard', 'profile', 'branches', 'upload')],
+      pagePermissions: [...viewOnly('dashboard', 'profile', 'branches', 'upload', 'reports')],
     },
     {
       name: 'Branch Manager',
       type: 'BRANCH_MANAGER',
       description: 'Single-branch access, scoped to assigned branch',
-      pagePermissions: [...viewOnly('dashboard', 'profile', 'upload')],
+      pagePermissions: [...viewOnly('dashboard', 'profile', 'upload', 'reports')],
     },
     {
       name: 'MIS',
       type: 'CUSTOM',
       description: 'MIS team — uploads and full reporting',
       pagePermissions: [
-        ...viewOnly('dashboard', 'profile'),
+        ...viewOnly('dashboard', 'profile', 'reports'),
         ...withActions('upload', ['view', 'create', 'edit', 'delete']),
+        ...fullAccess('factories', 'transactionTypes'),
       ],
     },
     {
@@ -188,22 +189,27 @@ async function main() {
   await db.page.updateMany({ data: { navGroupId: null } })
   await db.navGroup.deleteMany({})
 
-  const adminGroup = await db.navGroup.create({ data: { name: 'Admin', order: 0 } })
-  console.log('  1 nav group (Admin)')
+  const adminGroup   = await db.navGroup.create({ data: { name: 'Admin',   order: 0 } })
+  const dataGroup    = await db.navGroup.create({ data: { name: 'Data',    order: 1 } })
+  const reportsGroup = await db.navGroup.create({ data: { name: 'Reports', order: 2 } })
+  console.log('  3 nav groups (Admin, Data, Reports)')
 
   // ─────────────────────────────────────────────────────────────
   // 6b. PAGES
   // ─────────────────────────────────────────────────────────────
   const pageDefs = [
-    { resource: 'dashboard', label: 'Dashboard', path: '/',         icon: 'LayoutDashboard', navGroupId: null,          order: 0 },
-    { resource: 'profile',   label: 'Profile',   path: '/profile',  icon: 'UserCircle',      navGroupId: null,          order: 7 },
-    { resource: 'users',     label: 'Users',     path: '/users',    icon: 'Users',           navGroupId: adminGroup.id, order: 1 },
-    { resource: 'branches',  label: 'Branches',  path: '/branches', icon: 'Building2',       navGroupId: adminGroup.id, order: 2 },
-    { resource: 'roles',     label: 'Roles',     path: '/roles',    icon: 'Shield',          navGroupId: adminGroup.id, order: 3 },
-    { resource: 'pages',     label: 'Pages',     path: '/pages',    icon: 'Layout',          navGroupId: adminGroup.id, order: 4 },
-    { resource: 'upload',    label: 'Upload',    path: '/upload',   icon: 'Upload',          navGroupId: adminGroup.id, order: 5 },
-    { resource: 'products',  label: 'Products',  path: '/products', icon: 'Package',         navGroupId: adminGroup.id, order: 6 },
-    { resource: 'settings',  label: 'Settings',  path: '/settings', icon: 'Settings',        navGroupId: null,          order: 8 },
+    { resource: 'dashboard',        label: 'Dashboard',         path: '/',                  icon: 'LayoutDashboard', navGroupId: null,            order: 0 },
+    { resource: 'profile',          label: 'Profile',           path: '/profile',            icon: 'UserCircle',      navGroupId: null,            order: 9 },
+    { resource: 'users',            label: 'Users',             path: '/users',              icon: 'Users',           navGroupId: adminGroup.id,   order: 1 },
+    { resource: 'branches',         label: 'Branches',          path: '/branches',           icon: 'Building2',       navGroupId: adminGroup.id,   order: 2 },
+    { resource: 'roles',            label: 'Roles',             path: '/roles',              icon: 'Shield',          navGroupId: adminGroup.id,   order: 3 },
+    { resource: 'pages',            label: 'Pages',             path: '/pages',              icon: 'Layout',          navGroupId: adminGroup.id,   order: 4 },
+    { resource: 'upload',           label: 'Upload',            path: '/upload',             icon: 'Upload',          navGroupId: adminGroup.id,   order: 5 },
+    { resource: 'settings',         label: 'Settings',          path: '/settings',           icon: 'Settings',        navGroupId: null,            order: 10 },
+    { resource: 'factories',        label: 'Factories',         path: '/factories',          icon: 'Factory',         navGroupId: dataGroup.id,    order: 1 },
+    { resource: 'transactionTypes', label: 'Transaction Types', path: '/transaction-types',  icon: 'ArrowLeftRight',  navGroupId: dataGroup.id,    order: 2 },
+    { resource: 'products',         label: 'Products',          path: '/products',           icon: 'Package',         navGroupId: dataGroup.id,    order: 3 },
+    { resource: 'reports',          label: 'Reports',           path: '/reports',            icon: 'BarChart2',       navGroupId: reportsGroup.id, order: 1 },
   ]
 
   for (const page of pageDefs) {

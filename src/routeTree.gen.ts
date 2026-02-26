@@ -15,11 +15,14 @@ import { Route as LayoutRouteRouteImport } from './routes/_layout/route'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
 import { Route as LayoutUsersRouteImport } from './routes/_layout/users'
 import { Route as LayoutUploadRouteImport } from './routes/_layout/upload'
+import { Route as LayoutTransactionTypesRouteImport } from './routes/_layout/transaction-types'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
 import { Route as LayoutRolesRouteImport } from './routes/_layout/roles'
+import { Route as LayoutReportsRouteImport } from './routes/_layout/reports'
 import { Route as LayoutProfileRouteImport } from './routes/_layout/profile'
 import { Route as LayoutProductsRouteImport } from './routes/_layout/products'
 import { Route as LayoutPagesRouteImport } from './routes/_layout/pages'
+import { Route as LayoutFactoriesRouteImport } from './routes/_layout/factories'
 import { Route as LayoutBranchesRouteImport } from './routes/_layout/branches'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
@@ -52,6 +55,11 @@ const LayoutUploadRoute = LayoutUploadRouteImport.update({
   path: '/upload',
   getParentRoute: () => LayoutRouteRoute,
 } as any)
+const LayoutTransactionTypesRoute = LayoutTransactionTypesRouteImport.update({
+  id: '/transaction-types',
+  path: '/transaction-types',
+  getParentRoute: () => LayoutRouteRoute,
+} as any)
 const LayoutSettingsRoute = LayoutSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -60,6 +68,11 @@ const LayoutSettingsRoute = LayoutSettingsRouteImport.update({
 const LayoutRolesRoute = LayoutRolesRouteImport.update({
   id: '/roles',
   path: '/roles',
+  getParentRoute: () => LayoutRouteRoute,
+} as any)
+const LayoutReportsRoute = LayoutReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
   getParentRoute: () => LayoutRouteRoute,
 } as any)
 const LayoutProfileRoute = LayoutProfileRouteImport.update({
@@ -75,6 +88,11 @@ const LayoutProductsRoute = LayoutProductsRouteImport.update({
 const LayoutPagesRoute = LayoutPagesRouteImport.update({
   id: '/pages',
   path: '/pages',
+  getParentRoute: () => LayoutRouteRoute,
+} as any)
+const LayoutFactoriesRoute = LayoutFactoriesRouteImport.update({
+  id: '/factories',
+  path: '/factories',
   getParentRoute: () => LayoutRouteRoute,
 } as any)
 const LayoutBranchesRoute = LayoutBranchesRouteImport.update({
@@ -93,11 +111,14 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
   '/branches': typeof LayoutBranchesRoute
+  '/factories': typeof LayoutFactoriesRoute
   '/pages': typeof LayoutPagesRoute
   '/products': typeof LayoutProductsRoute
   '/profile': typeof LayoutProfileRoute
+  '/reports': typeof LayoutReportsRoute
   '/roles': typeof LayoutRolesRoute
   '/settings': typeof LayoutSettingsRoute
+  '/transaction-types': typeof LayoutTransactionTypesRoute
   '/upload': typeof LayoutUploadRoute
   '/users': typeof LayoutUsersRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -106,11 +127,14 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
   '/branches': typeof LayoutBranchesRoute
+  '/factories': typeof LayoutFactoriesRoute
   '/pages': typeof LayoutPagesRoute
   '/products': typeof LayoutProductsRoute
   '/profile': typeof LayoutProfileRoute
+  '/reports': typeof LayoutReportsRoute
   '/roles': typeof LayoutRolesRoute
   '/settings': typeof LayoutSettingsRoute
+  '/transaction-types': typeof LayoutTransactionTypesRoute
   '/upload': typeof LayoutUploadRoute
   '/users': typeof LayoutUsersRoute
   '/': typeof LayoutIndexRoute
@@ -122,11 +146,14 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
   '/_layout/branches': typeof LayoutBranchesRoute
+  '/_layout/factories': typeof LayoutFactoriesRoute
   '/_layout/pages': typeof LayoutPagesRoute
   '/_layout/products': typeof LayoutProductsRoute
   '/_layout/profile': typeof LayoutProfileRoute
+  '/_layout/reports': typeof LayoutReportsRoute
   '/_layout/roles': typeof LayoutRolesRoute
   '/_layout/settings': typeof LayoutSettingsRoute
+  '/_layout/transaction-types': typeof LayoutTransactionTypesRoute
   '/_layout/upload': typeof LayoutUploadRoute
   '/_layout/users': typeof LayoutUsersRoute
   '/_layout/': typeof LayoutIndexRoute
@@ -139,11 +166,14 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/branches'
+    | '/factories'
     | '/pages'
     | '/products'
     | '/profile'
+    | '/reports'
     | '/roles'
     | '/settings'
+    | '/transaction-types'
     | '/upload'
     | '/users'
     | '/api/auth/$'
@@ -152,11 +182,14 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/branches'
+    | '/factories'
     | '/pages'
     | '/products'
     | '/profile'
+    | '/reports'
     | '/roles'
     | '/settings'
+    | '/transaction-types'
     | '/upload'
     | '/users'
     | '/'
@@ -167,11 +200,14 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/_layout/branches'
+    | '/_layout/factories'
     | '/_layout/pages'
     | '/_layout/products'
     | '/_layout/profile'
+    | '/_layout/reports'
     | '/_layout/roles'
     | '/_layout/settings'
+    | '/_layout/transaction-types'
     | '/_layout/upload'
     | '/_layout/users'
     | '/_layout/'
@@ -229,6 +265,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutUploadRouteImport
       parentRoute: typeof LayoutRouteRoute
     }
+    '/_layout/transaction-types': {
+      id: '/_layout/transaction-types'
+      path: '/transaction-types'
+      fullPath: '/transaction-types'
+      preLoaderRoute: typeof LayoutTransactionTypesRouteImport
+      parentRoute: typeof LayoutRouteRoute
+    }
     '/_layout/settings': {
       id: '/_layout/settings'
       path: '/settings'
@@ -241,6 +284,13 @@ declare module '@tanstack/react-router' {
       path: '/roles'
       fullPath: '/roles'
       preLoaderRoute: typeof LayoutRolesRouteImport
+      parentRoute: typeof LayoutRouteRoute
+    }
+    '/_layout/reports': {
+      id: '/_layout/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof LayoutReportsRouteImport
       parentRoute: typeof LayoutRouteRoute
     }
     '/_layout/profile': {
@@ -264,6 +314,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutPagesRouteImport
       parentRoute: typeof LayoutRouteRoute
     }
+    '/_layout/factories': {
+      id: '/_layout/factories'
+      path: '/factories'
+      fullPath: '/factories'
+      preLoaderRoute: typeof LayoutFactoriesRouteImport
+      parentRoute: typeof LayoutRouteRoute
+    }
     '/_layout/branches': {
       id: '/_layout/branches'
       path: '/branches'
@@ -283,11 +340,14 @@ declare module '@tanstack/react-router' {
 
 interface LayoutRouteRouteChildren {
   LayoutBranchesRoute: typeof LayoutBranchesRoute
+  LayoutFactoriesRoute: typeof LayoutFactoriesRoute
   LayoutPagesRoute: typeof LayoutPagesRoute
   LayoutProductsRoute: typeof LayoutProductsRoute
   LayoutProfileRoute: typeof LayoutProfileRoute
+  LayoutReportsRoute: typeof LayoutReportsRoute
   LayoutRolesRoute: typeof LayoutRolesRoute
   LayoutSettingsRoute: typeof LayoutSettingsRoute
+  LayoutTransactionTypesRoute: typeof LayoutTransactionTypesRoute
   LayoutUploadRoute: typeof LayoutUploadRoute
   LayoutUsersRoute: typeof LayoutUsersRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
@@ -295,11 +355,14 @@ interface LayoutRouteRouteChildren {
 
 const LayoutRouteRouteChildren: LayoutRouteRouteChildren = {
   LayoutBranchesRoute: LayoutBranchesRoute,
+  LayoutFactoriesRoute: LayoutFactoriesRoute,
   LayoutPagesRoute: LayoutPagesRoute,
   LayoutProductsRoute: LayoutProductsRoute,
   LayoutProfileRoute: LayoutProfileRoute,
+  LayoutReportsRoute: LayoutReportsRoute,
   LayoutRolesRoute: LayoutRolesRoute,
   LayoutSettingsRoute: LayoutSettingsRoute,
+  LayoutTransactionTypesRoute: LayoutTransactionTypesRoute,
   LayoutUploadRoute: LayoutUploadRoute,
   LayoutUsersRoute: LayoutUsersRoute,
   LayoutIndexRoute: LayoutIndexRoute,

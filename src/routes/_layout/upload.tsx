@@ -2,7 +2,7 @@ import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { useState, useCallback, useRef } from 'react'
 import * as XLSX from 'xlsx'
-import { adminMiddleware } from '#/middleware/admin'
+import { resourceMiddleware } from '#/middleware/resource'
 import { db } from '#/lib/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -93,7 +93,7 @@ type UploadBatchRow = {
 // ── Server Functions ───────────────────────────────────────────────
 
 const getPageData = createServerFn({ method: 'GET' })
-  .middleware([adminMiddleware])
+  .middleware([resourceMiddleware('upload')])
   .handler(async () => {
     const [branches, factories, transactionTypes, recentBatches] = await Promise.all([
       db.branch.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } }),
@@ -131,7 +131,7 @@ const getPageData = createServerFn({ method: 'GET' })
   })
 
 const processUpload = createServerFn({ method: 'POST' })
-  .middleware([adminMiddleware])
+  .middleware([resourceMiddleware('upload')])
   .inputValidator(
     (data: {
       filename: string
@@ -350,7 +350,7 @@ const processUpload = createServerFn({ method: 'POST' })
   })
 
 const deleteBatch = createServerFn({ method: 'POST' })
-  .middleware([adminMiddleware])
+  .middleware([resourceMiddleware('upload')])
   .inputValidator((data: { batchId: string }) => data)
   .handler(async ({ data }) => {
     await db.uploadBatch.delete({ where: { id: data.batchId } })

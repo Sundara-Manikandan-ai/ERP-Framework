@@ -165,6 +165,8 @@ const deleteUser = createServerFn({ method: 'POST' })
   .inputValidator((data: { userId: string }) => data)
   .handler(async ({ data, context }) => {
     if (data.userId === context.user.id) throw new Error('Cannot delete your own account.')
+    const batchCount = await db.uploadBatch.count({ where: { uploadedBy: data.userId } })
+    if (batchCount > 0) throw new Error(`Cannot delete — user has ${batchCount} upload batch(es) on record.`)
     await db.user.delete({ where: { id: data.userId } })
     return { success: true }
   })
