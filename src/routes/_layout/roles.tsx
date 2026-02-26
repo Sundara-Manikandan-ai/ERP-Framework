@@ -15,6 +15,7 @@ import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
 import { resourceMiddleware } from '#/middleware/resource'
 import { extractAccess } from '#/lib/rbac'
+import { DeleteDialog } from '@/components/shared/DeleteDialog'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
@@ -52,17 +53,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -80,11 +70,11 @@ import {
   Key,
 } from 'lucide-react'
 import { z } from 'zod'
-import { cn } from '@/lib/utils'
+import { cn, getErrorMessage } from '@/lib/utils'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const ALL_RESOURCES = ['dashboard', 'profile', 'settings', 'users', 'branches', 'roles', 'upload'] as const
+const ALL_RESOURCES = ['dashboard', 'profile', 'settings', 'users', 'branches', 'roles', 'pages', 'products', 'upload'] as const
 const ALL_ACTIONS   = ['view', 'create', 'edit', 'delete'] as const
 
 type Resource = typeof ALL_RESOURCES[number]
@@ -747,36 +737,13 @@ function RolesPage() {
             <RoleGate {...access} requireAdmin>
               <div className="flex items-center justify-end gap-1">
                 <EditRoleDialog role={role} onSuccess={refresh} />
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive">
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Delete Role</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Are you sure you want to delete <strong>{role.name}</strong>? This cannot be undone.
-                        {role.userCount > 0 && (
-                          <span className="block mt-2 text-destructive font-medium">
-                            ⚠ This role has {role.userCount} assigned user{role.userCount !== 1 ? 's' : ''} and cannot be deleted.
-                          </span>
-                        )}
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction
-                        className="bg-destructive text-white hover:bg-destructive/90"
-                        disabled={role.userCount > 0}
-                        onClick={async () => { await deleteRole({ data: { id: role.id } }); refresh() }}
-                      >
-                        Delete
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+                <DeleteDialog
+                  title="Delete Role"
+                  description={<>Are you sure you want to delete <strong>{role.name}</strong>? This cannot be undone.</>}
+                  disabled={role.userCount > 0}
+                  disabledReason={role.userCount > 0 ? `This role has ${role.userCount} assigned user${role.userCount !== 1 ? 's' : ''} and cannot be deleted.` : undefined}
+                  onConfirm={async () => { await deleteRole({ data: { id: role.id } }); refresh() }}
+                />
               </div>
             </RoleGate>
           )
@@ -891,36 +858,13 @@ function RolesPage() {
                       <RoleGate {...access} requireAdmin>
                         <div className="flex items-center gap-1 shrink-0">
                           <EditRoleDialog role={role} onSuccess={refresh} />
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive h-8 w-8 p-0">
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Delete Role</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  Are you sure you want to delete <strong>{role.name}</strong>?
-                                  {role.userCount > 0 && (
-                                    <span className="block mt-2 text-destructive font-medium">
-                                      ⚠ {role.userCount} user{role.userCount !== 1 ? 's are' : ' is'} assigned to this role.
-                                    </span>
-                                  )}
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction
-                                  className="bg-destructive text-white hover:bg-destructive/90"
-                                  disabled={role.userCount > 0}
-                                  onClick={async () => { await deleteRole({ data: { id: role.id } }); refresh() }}
-                                >
-                                  Delete
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
+                          <DeleteDialog
+                            title="Delete Role"
+                            description={<>Are you sure you want to delete <strong>{role.name}</strong>? This cannot be undone.</>}
+                            disabled={role.userCount > 0}
+                            disabledReason={role.userCount > 0 ? `This role has ${role.userCount} assigned user${role.userCount !== 1 ? 's' : ''} and cannot be deleted.` : undefined}
+                            onConfirm={async () => { await deleteRole({ data: { id: role.id } }); refresh() }}
+                          />
                         </div>
                       </RoleGate>
                     </div>

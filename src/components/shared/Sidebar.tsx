@@ -91,10 +91,10 @@ export function Sidebar({ isAdmin, permissions, pages, appName }: SidebarProps) 
 
   const linkBase = cn(
     'flex items-center gap-2 px-2 py-1.5 rounded-md text-xs font-medium',
-    'text-[oklch(0.90_0.01_290)]',
-    'hover:bg-[oklch(0.55_0.10_290/0.25)] hover:text-white transition-colors'
+    'text-[oklch(0.90_0.01_160)]',
+    'hover:bg-[oklch(0.52_0.12_160/0.30)] hover:text-white transition-colors'
   )
-  const activeClass = 'bg-[oklch(0.55_0.10_290/0.35)] text-white'
+  const activeClass = 'bg-[oklch(0.52_0.12_160/0.40)] text-white'
 
   function NavItem({ page }: { page: PageEntry }) {
     const Icon = getIcon(page.icon)
@@ -129,8 +129,8 @@ export function Sidebar({ isAdmin, permissions, pages, appName }: SidebarProps) 
       <aside
         className={cn(
           'hidden md:flex flex-col h-screen border-r transition-all duration-300 shrink-0',
-          'bg-[oklch(0.28_0.08_290/0.65)] backdrop-blur-md',
-          'border-[oklch(0.60_0.18_290/0.25)]',
+          'bg-[oklch(0.22_0.08_160/0.75)] backdrop-blur-md',
+          'border-[oklch(0.55_0.15_160/0.30)]',
           collapsed ? 'w-12' : 'w-52'
         )}
       >
@@ -221,7 +221,7 @@ export function Sidebar({ isAdmin, permissions, pages, appName }: SidebarProps) 
           <Button
             variant="ghost"
             size="sm"
-            className="w-full h-7 justify-center text-[oklch(0.90_0.01_290)] hover:bg-[oklch(0.55_0.10_290/0.25)]"
+            className="w-full h-7 justify-center text-[oklch(0.90_0.01_160)] hover:bg-[oklch(0.52_0.12_160/0.30)]"
             onClick={() => setCollapsed((c) => {
               if (!c) setOpenGroups({})
               return !c
@@ -240,8 +240,8 @@ export function Sidebar({ isAdmin, permissions, pages, appName }: SidebarProps) 
         'md:hidden fixed bottom-0 left-0 right-0 z-50',
         'flex items-center justify-around',
         'h-14 px-2 border-t',
-        'bg-[oklch(0.28_0.08_290/0.90)] backdrop-blur-md',
-        'border-[oklch(0.60_0.18_290/0.3)]'
+        'bg-[oklch(0.22_0.08_160/0.92)] backdrop-blur-md',
+        'border-[oklch(0.55_0.15_160/0.35)]'
       )}>
         {topLevelPages.map((page) => {
           const Icon = getIcon(page.icon)
@@ -250,7 +250,7 @@ export function Sidebar({ isAdmin, permissions, pages, appName }: SidebarProps) 
               key={page.resource}
               to={page.path as any}
               activeProps={{ className: 'text-white' }}
-              className="flex flex-col items-center gap-0.5 px-3 py-1 rounded-md text-[oklch(0.75_0.01_290)] hover:text-white transition-colors"
+              className="flex flex-col items-center gap-0.5 px-3 py-1 rounded-md text-[oklch(0.78_0.01_160)] hover:text-white transition-colors"
             >
               <Icon className="w-4 h-4" />
               <span className="text-[9px] font-medium">{page.label}</span>
@@ -268,7 +268,7 @@ export function Sidebar({ isAdmin, permissions, pages, appName }: SidebarProps) 
                 'flex flex-col items-center gap-0.5 px-3 py-1 rounded-md transition-colors',
                 active
                   ? 'text-white'
-                  : 'text-[oklch(0.75_0.01_290)] hover:text-white'
+                  : 'text-[oklch(0.78_0.01_160)] hover:text-white'
               )}
             >
               <div className="relative">
@@ -293,19 +293,19 @@ export function Sidebar({ isAdmin, permissions, pages, appName }: SidebarProps) 
             />
             <div className={cn(
               'md:hidden fixed bottom-14 left-0 right-0 z-50',
-              'bg-[oklch(0.28_0.08_290/0.96)] backdrop-blur-md',
-              'border-t border-[oklch(0.60_0.18_290/0.3)]',
+              'bg-[oklch(0.22_0.08_160/0.96)] backdrop-blur-md',
+              'border-t border-[oklch(0.55_0.15_160/0.35)]',
               'rounded-t-xl pb-1',
               'animate-in slide-in-from-bottom-2 duration-200'
             )}>
-              <div className="flex items-center justify-between px-4 py-2.5 border-b border-[oklch(0.60_0.18_290/0.2)]">
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-[oklch(0.55_0.15_160/0.25)]">
                 <div className="flex items-center gap-2">
-                  <FolderOpen className="w-3.5 h-3.5 text-[oklch(0.75_0.01_290)]" />
+                  <FolderOpen className="w-3.5 h-3.5 text-[oklch(0.78_0.01_160)]" />
                   <span className="text-xs font-semibold text-white">{capitalize(group.name)}</span>
                 </div>
                 <button
                   onClick={() => setSheetGroup(null)}
-                  className="text-[oklch(0.75_0.01_290)] hover:text-white transition-colors"
+                  className="text-[oklch(0.78_0.01_160)] hover:text-white transition-colors"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>

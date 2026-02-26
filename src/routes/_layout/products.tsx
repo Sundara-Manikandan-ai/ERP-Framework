@@ -6,6 +6,7 @@ import { adminMiddleware } from '#/middleware/admin'
 import { resourceMiddleware } from '#/middleware/resource'
 import { extractAccess } from '#/lib/rbac'
 import { RoleGate } from '@/components/shared/RoleGate'
+import { DeleteDialog } from '@/components/shared/DeleteDialog'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,9 +16,6 @@ import { Switch } from '@/components/ui/switch'
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
 } from '@/components/ui/card'
 import {
   Dialog,
@@ -42,30 +40,17 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Loader2,
   PlusCircle,
-  Trash2,
   Pencil,
-  ChevronLeft,
-  ChevronRight,
   Package,
   Layers,
   Tag,
   Search,
-  ToggleLeft,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react'
 import { z } from 'zod'
 import { cn, getErrorMessage } from '@/lib/utils'
@@ -328,29 +313,9 @@ export const Route = createFileRoute('/_layout/products')({
   component: ProductsPage,
 })
 
-// ── Shared small components ────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
-function SortableHeader({
-  label,
-  sorted,
-  onToggle,
-}: {
-  label: string
-  sorted: 'asc' | 'desc' | false
-  onToggle: () => void
-}) {
-  return (
-    <button
-      onClick={onToggle}
-      className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-    >
-      {label}
-      <span className="text-muted-foreground/60">
-        {sorted === 'asc' ? '↑' : sorted === 'desc' ? '↓' : '↕'}
-      </span>
-    </button>
-  )
-}
+const PAGE_SIZE = 10
 
 function useSortedFiltered<T extends Record<string, any>>(
   items: T[],
@@ -372,440 +337,31 @@ function useSortedFiltered<T extends Record<string, any>>(
   }, [items, search, sortKey, sortDir])
 }
 
-const PAGE_SIZE = 10
-
 function usePaginated<T>(items: T[], page: number) {
-  const pageCount = Math.ceil(items.length / PAGE_SIZE)
+  const pageCount = Math.ceil(items.length / PAGE_SIZE) || 1
   const pageItems = items.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
   return { pageItems, pageCount }
 }
 
-// ── Category dialogs ───────────────────────────────────────────────────────────
-
-function CategoryDialog({
-  mode,
-  category,
-  onSuccess,
-}: {
-  mode: 'create' | 'edit'
-  category?: CategoryRow
-  onSuccess: () => void
-}) {
-  const [open, setOpen]           = useState(false)
-  const [name, setName]           = useState(category?.name ?? '')
-  const [isPending, setIsPending] = useState(false)
-  const [error, setError]         = useState<string | null>(null)
-
-  function handleOpenChange(v: boolean) {
-    setOpen(v)
-    if (v) { setName(category?.name ?? ''); setError(null) }
-  }
-
-  async function handleSubmit() {
-    setError(null)
-    setIsPending(true)
-    try {
-      if (mode === 'create') {
-        await createCategory({ data: { name } })
-      } else {
-        await updateCategory({ data: { id: category!.id, name } })
-      }
-      setOpen(false)
-      onSuccess()
-    } catch (e: unknown) {
-      setError(getErrorMessage(e, 'Something went wrong.'))
-    } finally {
-      setIsPending(false)
-    }
-  }
-
-  const trigger = mode === 'create' ? (
-    <Button size="sm">
-      <PlusCircle className="w-4 h-4 mr-2" />
-      Add Category
-    </Button>
-  ) : (
-    <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
-      <Pencil className="w-3.5 h-3.5" />
-    </Button>
-  )
-
+function SortBtn({
+  label, sorted, onToggle,
+}: { label: string; sorted: 'asc' | 'desc' | false; onToggle: () => void }) {
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{mode === 'create' ? 'Add Category' : 'Edit Category'}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 py-2">
-          <div className="space-y-1.5">
-            <Label>Name</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Cake"
-              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
-            />
-          </div>
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)} disabled={isPending}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} disabled={isPending || !name.trim()}>
-            {isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-            {mode === 'create' ? 'Create' : 'Save'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <button
+      onClick={onToggle}
+      className="flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground uppercase tracking-wide transition-colors"
+    >
+      {label}
+      <span className="opacity-50">{sorted === 'asc' ? '↑' : sorted === 'desc' ? '↓' : '↕'}</span>
+    </button>
   )
 }
-
-// ── Subcategory dialogs ────────────────────────────────────────────────────────
-
-function SubcategoryDialog({
-  mode,
-  subcategory,
-  categories,
-  defaultCategoryId,
-  onSuccess,
-}: {
-  mode: 'create' | 'edit'
-  subcategory?: SubcategoryRow
-  categories: CategoryRow[]
-  defaultCategoryId?: string
-  onSuccess: () => void
-}) {
-  const [open, setOpen]           = useState(false)
-  const [name, setName]           = useState(subcategory?.name ?? '')
-  const [categoryId, setCategoryId] = useState(subcategory?.categoryId ?? defaultCategoryId ?? '')
-  const [isPending, setIsPending] = useState(false)
-  const [error, setError]         = useState<string | null>(null)
-
-  function handleOpenChange(v: boolean) {
-    setOpen(v)
-    if (v) {
-      setName(subcategory?.name ?? '')
-      setCategoryId(subcategory?.categoryId ?? defaultCategoryId ?? '')
-      setError(null)
-    }
-  }
-
-  async function handleSubmit() {
-    setError(null)
-    setIsPending(true)
-    try {
-      if (mode === 'create') {
-        await createSubcategory({ data: { name, categoryId } })
-      } else {
-        await updateSubcategory({ data: { id: subcategory!.id, name, categoryId } })
-      }
-      setOpen(false)
-      onSuccess()
-    } catch (e: unknown) {
-      setError(getErrorMessage(e, 'Something went wrong.'))
-    } finally {
-      setIsPending(false)
-    }
-  }
-
-  const trigger = mode === 'create' ? (
-    <Button size="sm">
-      <PlusCircle className="w-4 h-4 mr-2" />
-      Add Subcategory
-    </Button>
-  ) : (
-    <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
-      <Pencil className="w-3.5 h-3.5" />
-    </Button>
-  )
-
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{mode === 'create' ? 'Add Subcategory' : 'Edit Subcategory'}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 py-2">
-          <div className="space-y-1.5">
-            <Label>Category</Label>
-            <Select value={categoryId} onValueChange={setCategoryId}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select category..." />
-              </SelectTrigger>
-              <SelectContent>
-                {categories.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Name</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Layer Cake"
-              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
-            />
-          </div>
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)} disabled={isPending}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} disabled={isPending || !name.trim() || !categoryId}>
-            {isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-            {mode === 'create' ? 'Create' : 'Save'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// ── Product dialog ─────────────────────────────────────────────────────────────
-
-function ProductDialog({
-  mode,
-  product,
-  categories,
-  subcategories,
-  defaultSubcategoryId,
-  onSuccess,
-}: {
-  mode: 'create' | 'edit'
-  product?: ProductRow
-  categories: CategoryRow[]
-  subcategories: SubcategoryRow[]
-  defaultSubcategoryId?: string
-  onSuccess: () => void
-}) {
-  const [open, setOpen]               = useState(false)
-  const [name, setName]               = useState(product?.name ?? '')
-  const [unit, setUnit]               = useState(product?.unit ?? 'pcs')
-  const [subcategoryId, setSubcategoryId] = useState(product?.subcategoryId ?? defaultSubcategoryId ?? '')
-  const [categoryId, setCategoryId]   = useState(
-    product?.categoryId ?? subcategories.find((s) => s.id === defaultSubcategoryId)?.categoryId ?? ''
-  )
-  const [isPending, setIsPending]     = useState(false)
-  const [error, setError]             = useState<string | null>(null)
-
-  const filteredSubcategories = subcategories.filter((s) => s.categoryId === categoryId)
-
-  function handleOpenChange(v: boolean) {
-    setOpen(v)
-    if (v) {
-      setName(product?.name ?? '')
-      setUnit(product?.unit ?? 'pcs')
-      const sc = subcategories.find((s) => s.id === (product?.subcategoryId ?? defaultSubcategoryId))
-      setCategoryId(product?.categoryId ?? sc?.categoryId ?? '')
-      setSubcategoryId(product?.subcategoryId ?? defaultSubcategoryId ?? '')
-      setError(null)
-    }
-  }
-
-  function handleCategoryChange(val: string) {
-    setCategoryId(val)
-    setSubcategoryId('')
-  }
-
-  async function handleSubmit() {
-    setError(null)
-    setIsPending(true)
-    try {
-      if (mode === 'create') {
-        await createProduct({ data: { name, subcategoryId, unit } })
-      } else {
-        await updateProduct({ data: { id: product!.id, name, subcategoryId, unit } })
-      }
-      setOpen(false)
-      onSuccess()
-    } catch (e: unknown) {
-      setError(getErrorMessage(e, 'Something went wrong.'))
-    } finally {
-      setIsPending(false)
-    }
-  }
-
-  const UNIT_OPTIONS = ['pcs', 'kg', 'g', 'box', 'dozen', 'tray', 'bag', 'litre']
-
-  const trigger = mode === 'create' ? (
-    <Button size="sm">
-      <PlusCircle className="w-4 h-4 mr-2" />
-      Add Product
-    </Button>
-  ) : (
-    <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
-      <Pencil className="w-3.5 h-3.5" />
-    </Button>
-  )
-
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{mode === 'create' ? 'Add Product' : 'Edit Product'}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 py-2">
-          <div className="space-y-1.5">
-            <Label>Category</Label>
-            <Select value={categoryId} onValueChange={handleCategoryChange}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select category..." />
-              </SelectTrigger>
-              <SelectContent>
-                {categories.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Subcategory</Label>
-            <Select value={subcategoryId} onValueChange={setSubcategoryId} disabled={!categoryId}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder={categoryId ? 'Select subcategory...' : 'Select category first'} />
-              </SelectTrigger>
-              <SelectContent>
-                {filteredSubcategories.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Product Name</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Chocolate Fudge Cake"
-              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Unit</Label>
-            <Select value={unit} onValueChange={setUnit}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {UNIT_OPTIONS.map((u) => (
-                  <SelectItem key={u} value={u}>{u}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)} disabled={isPending}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} disabled={isPending || !name.trim() || !subcategoryId}>
-            {isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-            {mode === 'create' ? 'Create' : 'Save'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// ── Delete confirm ─────────────────────────────────────────────────────────────
-
-function DeleteButton({
-  label,
-  description,
-  onConfirm,
-  disabled,
-  disabledReason,
-}: {
-  label: string
-  description: string
-  onConfirm: () => Promise<void>
-  disabled?: boolean
-  disabledReason?: string
-}) {
-  const [error, setError] = useState<string | null>(null)
-
-  return (
-    <AlertDialog onOpenChange={() => setError(null)}>
-      <AlertDialogTrigger asChild>
-        <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive h-7 w-7 p-0">
-          <Trash2 className="w-3.5 h-3.5" />
-        </Button>
-      </AlertDialogTrigger>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete {label}</AlertDialogTitle>
-          <AlertDialogDescription>
-            {description}
-            {disabled && disabledReason && (
-              <span className="block mt-2 text-destructive font-medium">⚠ {disabledReason}</span>
-            )}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            className="bg-destructive text-white hover:bg-destructive/90"
-            disabled={disabled}
-            onClick={async () => {
-              setError(null)
-              try {
-                await onConfirm()
-              } catch (e: unknown) {
-                setError(getErrorMessage(e, 'Failed to delete.'))
-              }
-            }}
-          >
-            Delete
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  )
-}
-
-// ── Pagination bar ─────────────────────────────────────────────────────────────
 
 function PaginationBar({
-  page,
-  pageCount,
-  total,
-  filtered,
-  onPrev,
-  onNext,
+  page, pageCount, total, filtered, onPrev, onNext,
 }: {
-  page: number
-  pageCount: number
-  total: number
-  filtered: number
-  onPrev: () => void
-  onNext: () => void
+  page: number; pageCount: number; total: number; filtered: number
+  onPrev: () => void; onNext: () => void
 }) {
   if (pageCount <= 1 && total === filtered) return null
   return (
@@ -828,21 +384,9 @@ function PaginationBar({
   )
 }
 
-// ── Tab button ─────────────────────────────────────────────────────────────────
-
-function TabButton({
-  active,
-  onClick,
-  icon: Icon,
-  label,
-  count,
-}: {
-  active: boolean
-  onClick: () => void
-  icon: React.ElementType
-  label: string
-  count: number
-}) {
+function TabBtn({
+  active, onClick, icon: Icon, label, count,
+}: { active: boolean; onClick: () => void; icon: React.ElementType; label: string; count: number }) {
   return (
     <button
       onClick={onClick}
@@ -855,10 +399,283 @@ function TabButton({
     >
       <Icon className="w-4 h-4" />
       {label}
-      <Badge variant={active ? 'default' : 'secondary'} className="text-xs h-5 px-1.5">
-        {count}
-      </Badge>
+      <Badge variant={active ? 'default' : 'secondary'} className="text-xs h-5 px-1.5">{count}</Badge>
     </button>
+  )
+}
+
+// ── Category Dialog ────────────────────────────────────────────────────────────
+
+function CategoryDialog({
+  mode, category, onSuccess,
+}: { mode: 'create' | 'edit'; category?: CategoryRow; onSuccess: () => void }) {
+  const [open, setOpen]           = useState(false)
+  const [name, setName]           = useState(category?.name ?? '')
+  const [isPending, setIsPending] = useState(false)
+  const [error, setError]         = useState<string | null>(null)
+
+  function handleOpenChange(v: boolean) {
+    setOpen(v)
+    if (v) { setName(category?.name ?? ''); setError(null) }
+  }
+
+  async function handleSubmit() {
+    setError(null)
+    setIsPending(true)
+    try {
+      if (mode === 'create') await createCategory({ data: { name } })
+      else await updateCategory({ data: { id: category!.id, name } })
+      setOpen(false)
+      onSuccess()
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Something went wrong.'))
+    } finally {
+      setIsPending(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>
+        {mode === 'create'
+          ? <Button size="sm"><PlusCircle className="w-4 h-4 mr-2" />Add Category</Button>
+          : <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><Pencil className="w-3.5 h-3.5" /></Button>
+        }
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{mode === 'create' ? 'Add Category' : 'Edit Category'}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1.5">
+            <Label>Name</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Cake"
+              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+            />
+          </div>
+          {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)} disabled={isPending}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={isPending || !name.trim()}>
+            {isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+            {mode === 'create' ? 'Create' : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ── Subcategory Dialog ─────────────────────────────────────────────────────────
+
+function SubcategoryDialog({
+  mode, subcategory, categories, defaultCategoryId, onSuccess,
+}: {
+  mode: 'create' | 'edit'
+  subcategory?: SubcategoryRow
+  categories: CategoryRow[]
+  defaultCategoryId?: string
+  onSuccess: () => void
+}) {
+  const [open, setOpen]               = useState(false)
+  const [name, setName]               = useState(subcategory?.name ?? '')
+  const [categoryId, setCategoryId]   = useState(subcategory?.categoryId ?? defaultCategoryId ?? '')
+  const [isPending, setIsPending]     = useState(false)
+  const [error, setError]             = useState<string | null>(null)
+
+  function handleOpenChange(v: boolean) {
+    setOpen(v)
+    if (v) {
+      setName(subcategory?.name ?? '')
+      setCategoryId(subcategory?.categoryId ?? defaultCategoryId ?? '')
+      setError(null)
+    }
+  }
+
+  async function handleSubmit() {
+    setError(null)
+    setIsPending(true)
+    try {
+      if (mode === 'create') await createSubcategory({ data: { name, categoryId } })
+      else await updateSubcategory({ data: { id: subcategory!.id, name, categoryId } })
+      setOpen(false)
+      onSuccess()
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Something went wrong.'))
+    } finally {
+      setIsPending(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>
+        {mode === 'create'
+          ? <Button size="sm"><PlusCircle className="w-4 h-4 mr-2" />Add Subcategory</Button>
+          : <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><Pencil className="w-3.5 h-3.5" /></Button>
+        }
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{mode === 'create' ? 'Add Subcategory' : 'Edit Subcategory'}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1.5">
+            <Label>Category</Label>
+            <Select value={categoryId} onValueChange={setCategoryId}>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Select category..." /></SelectTrigger>
+              <SelectContent>
+                {categories.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Name</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Layer Cake"
+              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+            />
+          </div>
+          {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)} disabled={isPending}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={isPending || !name.trim() || !categoryId}>
+            {isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+            {mode === 'create' ? 'Create' : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ── Product Dialog ─────────────────────────────────────────────────────────────
+
+const UNIT_OPTIONS = ['pcs', 'kg', 'g', 'box', 'dozen', 'tray', 'bag', 'litre']
+
+function ProductDialog({
+  mode, product, categories, subcategories, defaultSubcategoryId, onSuccess,
+}: {
+  mode: 'create' | 'edit'
+  product?: ProductRow
+  categories: CategoryRow[]
+  subcategories: SubcategoryRow[]
+  defaultSubcategoryId?: string
+  onSuccess: () => void
+}) {
+  const [open, setOpen]                   = useState(false)
+  const [name, setName]                   = useState(product?.name ?? '')
+  const [unit, setUnit]                   = useState(product?.unit ?? 'pcs')
+  const [categoryId, setCategoryId]       = useState(
+    product?.categoryId ?? subcategories.find((s) => s.id === defaultSubcategoryId)?.categoryId ?? ''
+  )
+  const [subcategoryId, setSubcategoryId] = useState(product?.subcategoryId ?? defaultSubcategoryId ?? '')
+  const [isPending, setIsPending]         = useState(false)
+  const [error, setError]                 = useState<string | null>(null)
+
+  const filteredSubs = subcategories.filter((s) => s.categoryId === categoryId)
+
+  function handleOpenChange(v: boolean) {
+    setOpen(v)
+    if (v) {
+      setName(product?.name ?? '')
+      setUnit(product?.unit ?? 'pcs')
+      const sc = subcategories.find((s) => s.id === (product?.subcategoryId ?? defaultSubcategoryId))
+      setCategoryId(product?.categoryId ?? sc?.categoryId ?? '')
+      setSubcategoryId(product?.subcategoryId ?? defaultSubcategoryId ?? '')
+      setError(null)
+    }
+  }
+
+  function handleCategoryChange(val: string) {
+    setCategoryId(val)
+    setSubcategoryId('')
+  }
+
+  async function handleSubmit() {
+    setError(null)
+    setIsPending(true)
+    try {
+      if (mode === 'create') await createProduct({ data: { name, subcategoryId, unit } })
+      else await updateProduct({ data: { id: product!.id, name, subcategoryId, unit } })
+      setOpen(false)
+      onSuccess()
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, 'Something went wrong.'))
+    } finally {
+      setIsPending(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>
+        {mode === 'create'
+          ? <Button size="sm"><PlusCircle className="w-4 h-4 mr-2" />Add Product</Button>
+          : <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><Pencil className="w-3.5 h-3.5" /></Button>
+        }
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{mode === 'create' ? 'Add Product' : 'Edit Product'}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1.5">
+            <Label>Category</Label>
+            <Select value={categoryId} onValueChange={handleCategoryChange}>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Select category..." /></SelectTrigger>
+              <SelectContent>
+                {categories.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Subcategory</Label>
+            <Select value={subcategoryId} onValueChange={setSubcategoryId} disabled={!categoryId}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={categoryId ? 'Select subcategory...' : 'Select category first'} />
+              </SelectTrigger>
+              <SelectContent>
+                {filteredSubs.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Product Name</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Chocolate Fudge Cake"
+              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Unit</Label>
+            <Select value={unit} onValueChange={setUnit}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {UNIT_OPTIONS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)} disabled={isPending}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={isPending || !name.trim() || !subcategoryId}>
+            {isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+            {mode === 'create' ? 'Create' : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -869,14 +686,11 @@ function ProductsPage() {
   const { access, categories, subcategories, products } = Route.useLoaderData()
   const refresh = () => router.invalidate()
 
-  // Tab
   const [tab, setTab] = useState<'categories' | 'subcategories' | 'products'>('categories')
 
-  // Drill-down context — clicking a category badge pre-filters the next tab
-  const [filterCategoryId,    setFilterCategoryId]    = useState<string>('')
-  const [filterSubcategoryId, setFilterSubcategoryId] = useState<string>('')
+  const [filterCategoryId,    setFilterCategoryId]    = useState('')
+  const [filterSubcategoryId, setFilterSubcategoryId] = useState('')
 
-  // Per-tab search + sort + page
   const [catSearch,  setCatSearch]  = useState('')
   const [subSearch,  setSubSearch]  = useState('')
   const [prodSearch, setProdSearch] = useState('')
@@ -899,7 +713,6 @@ function ProductsPage() {
     resetPage()
   }
 
-  // Filtered + sorted data
   const filteredSubcategories = useMemo(
     () => filterCategoryId ? subcategories.filter((s) => s.categoryId === filterCategoryId) : subcategories,
     [subcategories, filterCategoryId]
@@ -911,8 +724,8 @@ function ProductsPage() {
     return p
   }, [products, filterCategoryId, filterSubcategoryId])
 
-  const sortedCats  = useSortedFiltered(categories,            ['name'],                          catSearch,  catSort.key,  catSort.dir)
-  const sortedSubs  = useSortedFiltered(filteredSubcategories, ['name', 'categoryName'],          subSearch,  subSort.key,  subSort.dir)
+  const sortedCats  = useSortedFiltered(categories,            ['name'],                                          catSearch,  catSort.key,  catSort.dir)
+  const sortedSubs  = useSortedFiltered(filteredSubcategories, ['name', 'categoryName'],                          subSearch,  subSort.key,  subSort.dir)
   const sortedProds = useSortedFiltered(filteredProducts,      ['name', 'categoryName', 'subcategoryName', 'unit'], prodSearch, prodSort.key, prodSort.dir)
 
   const { pageItems: catItems,  pageCount: catPageCount  } = usePaginated(sortedCats,  catPage)
@@ -927,20 +740,12 @@ function ProductsPage() {
     setTab('subcategories')
   }
 
-  function drillToProds(subcategoryId: string) {
-    setFilterSubcategoryId(subcategoryId)
+  function drillToProds(opts: { categoryId?: string; subcategoryId?: string }) {
+    if (opts.categoryId)    setFilterCategoryId(opts.categoryId)
+    if (opts.subcategoryId) setFilterSubcategoryId(opts.subcategoryId)
     setProdSearch('')
     setProdPage(0)
     setTab('products')
-  }
-
-  function clearCategoryFilter() {
-    setFilterCategoryId('')
-    setFilterSubcategoryId('')
-  }
-
-  function clearSubcategoryFilter() {
-    setFilterSubcategoryId('')
   }
 
   const activeCategoryName    = categories.find((c) => c.id === filterCategoryId)?.name
@@ -948,7 +753,6 @@ function ProductsPage() {
 
   return (
     <div className="space-y-3">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Products</h1>
@@ -959,34 +763,17 @@ function ProductsPage() {
       <Card>
         {/* Tab bar */}
         <div className="flex border-b overflow-x-auto">
-          <TabButton
-            active={tab === 'categories'}
-            onClick={() => setTab('categories')}
-            icon={Layers}
-            label="Categories"
-            count={categories.length}
-          />
-          <TabButton
-            active={tab === 'subcategories'}
-            onClick={() => setTab('subcategories')}
-            icon={Tag}
-            label="Subcategories"
-            count={subcategories.length}
-          />
-          <TabButton
-            active={tab === 'products'}
-            onClick={() => setTab('products')}
-            icon={Package}
-            label="Products"
-            count={products.length}
-          />
+          <TabBtn active={tab === 'categories'}    onClick={() => setTab('categories')}    icon={Layers}  label="Categories"    count={categories.length} />
+          <TabBtn active={tab === 'subcategories'} onClick={() => setTab('subcategories')} icon={Tag}     label="Subcategories" count={subcategories.length} />
+          <TabBtn active={tab === 'products'}      onClick={() => setTab('products')}      icon={Package} label="Products"      count={products.length} />
         </div>
 
-        <CardContent className="p-4 space-y-3">
+        <CardContent className="p-3 space-y-3">
 
-          {/* ── CATEGORIES TAB ─────────────────────────────────────── */}
+          {/* ── CATEGORIES ─────────────────────────────────────────── */}
           {tab === 'categories' && (
             <>
+              {/* Toolbar */}
               <div className="flex items-center gap-2">
                 <div className="relative flex-1 md:max-w-sm">
                   <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground pointer-events-none" />
@@ -1007,13 +794,7 @@ function ProductsPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>
-                        <SortableHeader
-                          label="Name"
-                          sorted={catSort.key === 'name' ? catSort.dir : false}
-                          onToggle={() => toggleSort(catSort, 'name', setCatSort, () => setCatPage(0))}
-                        />
-                      </TableHead>
+                      <TableHead><SortBtn label="Name" sorted={catSort.key === 'name' ? catSort.dir : false} onToggle={() => toggleSort(catSort, 'name', setCatSort, () => setCatPage(0))} /></TableHead>
                       <TableHead className="text-right">Subcategories</TableHead>
                       <TableHead className="text-right">Products</TableHead>
                       <TableHead className="w-20" />
@@ -1024,18 +805,12 @@ function ProductsPage() {
                       <TableRow key={cat.id}>
                         <TableCell className="font-medium">{cat.name}</TableCell>
                         <TableCell className="text-right">
-                          <button
-                            onClick={() => drillToSubs(cat.id)}
-                            className="text-sm text-primary hover:underline underline-offset-2"
-                          >
+                          <button onClick={() => drillToSubs(cat.id)} className="text-sm text-primary hover:underline underline-offset-2">
                             {cat.subcategoryCount}
                           </button>
                         </TableCell>
                         <TableCell className="text-right">
-                          <button
-                            onClick={() => { setFilterCategoryId(cat.id); setFilterSubcategoryId(''); drillToProds('') }}
-                            className="text-sm text-primary hover:underline underline-offset-2"
-                          >
+                          <button onClick={() => drillToProds({ categoryId: cat.id })} className="text-sm text-primary hover:underline underline-offset-2">
                             {cat.productCount}
                           </button>
                         </TableCell>
@@ -1043,9 +818,9 @@ function ProductsPage() {
                           <RoleGate {...access} requireAdmin>
                             <div className="flex items-center justify-end gap-1">
                               <CategoryDialog mode="edit" category={cat} onSuccess={refresh} />
-                              <DeleteButton
-                                label="Category"
-                                description={`Delete "${cat.name}"? This cannot be undone.`}
+                              <DeleteDialog
+                                title="Delete Category"
+                                description={<>Are you sure you want to delete <strong>{cat.name}</strong>? This cannot be undone.</>}
                                 disabled={cat.subcategoryCount > 0}
                                 disabledReason={cat.subcategoryCount > 0 ? `${cat.subcategoryCount} subcategor${cat.subcategoryCount === 1 ? 'y' : 'ies'} must be removed first.` : undefined}
                                 onConfirm={async () => { await deleteCategory({ data: { id: cat.id } }); refresh() }}
@@ -1056,9 +831,7 @@ function ProductsPage() {
                       </TableRow>
                     )) : (
                       <TableRow>
-                        <TableCell colSpan={4} className="text-center py-10 text-muted-foreground">
-                          No categories found.
-                        </TableCell>
+                        <TableCell colSpan={4} className="text-center py-10 text-muted-foreground">No categories found.</TableCell>
                       </TableRow>
                     )}
                   </TableBody>
@@ -1066,10 +839,10 @@ function ProductsPage() {
               </div>
 
               {/* Mobile cards */}
-              <div className="flex flex-col gap-2 md:hidden">
+              <div className="flex flex-col gap-3 md:hidden">
                 {catItems.length ? catItems.map((cat) => (
-                  <div key={cat.id} className="rounded-lg border bg-card p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
+                  <div key={cat.id} className="rounded-lg border bg-card p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <Layers className="w-4 h-4 text-muted-foreground shrink-0" />
                         <span className="font-medium truncate">{cat.name}</span>
@@ -1077,9 +850,9 @@ function ProductsPage() {
                       <RoleGate {...access} requireAdmin>
                         <div className="flex items-center gap-1 shrink-0">
                           <CategoryDialog mode="edit" category={cat} onSuccess={refresh} />
-                          <DeleteButton
-                            label="Category"
-                            description={`Delete "${cat.name}"?`}
+                          <DeleteDialog
+                            title="Delete Category"
+                            description={<>Are you sure you want to delete <strong>{cat.name}</strong>?</>}
                             disabled={cat.subcategoryCount > 0}
                             disabledReason={cat.subcategoryCount > 0 ? `${cat.subcategoryCount} subcategor${cat.subcategoryCount === 1 ? 'y' : 'ies'} must be removed first.` : undefined}
                             onConfirm={async () => { await deleteCategory({ data: { id: cat.id } }); refresh() }}
@@ -1087,16 +860,13 @@ function ProductsPage() {
                         </div>
                       </RoleGate>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => drillToSubs(cat.id)} className="flex items-center gap-1 text-xs text-primary hover:underline">
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => drillToSubs(cat.id)} className="flex items-center gap-1.5 text-xs text-primary hover:underline">
                         <Tag className="w-3 h-3" />
                         {cat.subcategoryCount} subcategor{cat.subcategoryCount === 1 ? 'y' : 'ies'}
                       </button>
-                      <span className="text-muted-foreground">·</span>
-                      <button
-                        onClick={() => { setFilterCategoryId(cat.id); setFilterSubcategoryId(''); setTab('products') }}
-                        className="flex items-center gap-1 text-xs text-primary hover:underline"
-                      >
+                      <span className="text-muted-foreground/40">·</span>
+                      <button onClick={() => drillToProds({ categoryId: cat.id })} className="flex items-center gap-1.5 text-xs text-primary hover:underline">
                         <Package className="w-3 h-3" />
                         {cat.productCount} product{cat.productCount === 1 ? '' : 's'}
                       </button>
@@ -1107,18 +877,14 @@ function ProductsPage() {
                 )}
               </div>
 
-              <PaginationBar
-                page={catPage} pageCount={catPageCount}
-                total={categories.length} filtered={sortedCats.length}
-                onPrev={() => setCatPage((p) => p - 1)}
-                onNext={() => setCatPage((p) => p + 1)}
-              />
+              <PaginationBar page={catPage} pageCount={catPageCount} total={categories.length} filtered={sortedCats.length} onPrev={() => setCatPage((p) => p - 1)} onNext={() => setCatPage((p) => p + 1)} />
             </>
           )}
 
-          {/* ── SUBCATEGORIES TAB ──────────────────────────────────── */}
+          {/* ── SUBCATEGORIES ──────────────────────────────────────── */}
           {tab === 'subcategories' && (
             <>
+              {/* Toolbar */}
               <div className="flex items-center gap-2 flex-wrap">
                 <div className="relative flex-1 min-w-0 md:max-w-sm">
                   <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground pointer-events-none" />
@@ -1132,19 +898,14 @@ function ProductsPage() {
                 {filterCategoryId && (
                   <Badge
                     variant="secondary"
-                    className="gap-1 cursor-pointer hover:bg-destructive/10 hover:text-destructive transition-colors"
-                    onClick={clearCategoryFilter}
+                    className="gap-1 cursor-pointer hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
+                    onClick={() => setFilterCategoryId('')}
                   >
                     {activeCategoryName} ×
                   </Badge>
                 )}
                 <RoleGate {...access} requireAdmin>
-                  <SubcategoryDialog
-                    mode="create"
-                    categories={categories}
-                    defaultCategoryId={filterCategoryId}
-                    onSuccess={refresh}
-                  />
+                  <SubcategoryDialog mode="create" categories={categories} defaultCategoryId={filterCategoryId} onSuccess={refresh} />
                 </RoleGate>
               </div>
 
@@ -1153,20 +914,8 @@ function ProductsPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>
-                        <SortableHeader
-                          label="Name"
-                          sorted={subSort.key === 'name' ? subSort.dir : false}
-                          onToggle={() => toggleSort(subSort, 'name', setSubSort, () => setSubPage(0))}
-                        />
-                      </TableHead>
-                      <TableHead>
-                        <SortableHeader
-                          label="Category"
-                          sorted={subSort.key === 'categoryName' ? subSort.dir : false}
-                          onToggle={() => toggleSort(subSort, 'categoryName', setSubSort, () => setSubPage(0))}
-                        />
-                      </TableHead>
+                      <TableHead><SortBtn label="Name" sorted={subSort.key === 'name' ? subSort.dir : false} onToggle={() => toggleSort(subSort, 'name', setSubSort, () => setSubPage(0))} /></TableHead>
+                      <TableHead><SortBtn label="Category" sorted={subSort.key === 'categoryName' ? subSort.dir : false} onToggle={() => toggleSort(subSort, 'categoryName', setSubSort, () => setSubPage(0))} /></TableHead>
                       <TableHead className="text-right">Products</TableHead>
                       <TableHead className="w-20" />
                     </TableRow>
@@ -1179,10 +928,7 @@ function ProductsPage() {
                           <Badge variant="secondary" className="text-xs font-normal">{sub.categoryName}</Badge>
                         </TableCell>
                         <TableCell className="text-right">
-                          <button
-                            onClick={() => drillToProds(sub.id)}
-                            className="text-sm text-primary hover:underline underline-offset-2"
-                          >
+                          <button onClick={() => drillToProds({ categoryId: sub.categoryId, subcategoryId: sub.id })} className="text-sm text-primary hover:underline underline-offset-2">
                             {sub.productCount}
                           </button>
                         </TableCell>
@@ -1190,9 +936,9 @@ function ProductsPage() {
                           <RoleGate {...access} requireAdmin>
                             <div className="flex items-center justify-end gap-1">
                               <SubcategoryDialog mode="edit" subcategory={sub} categories={categories} onSuccess={refresh} />
-                              <DeleteButton
-                                label="Subcategory"
-                                description={`Delete "${sub.name}"? This cannot be undone.`}
+                              <DeleteDialog
+                                title="Delete Subcategory"
+                                description={<>Are you sure you want to delete <strong>{sub.name}</strong>? This cannot be undone.</>}
                                 disabled={sub.productCount > 0}
                                 disabledReason={sub.productCount > 0 ? `${sub.productCount} product${sub.productCount === 1 ? '' : 's'} must be removed first.` : undefined}
                                 onConfirm={async () => { await deleteSubcategory({ data: { id: sub.id } }); refresh() }}
@@ -1203,9 +949,7 @@ function ProductsPage() {
                       </TableRow>
                     )) : (
                       <TableRow>
-                        <TableCell colSpan={4} className="text-center py-10 text-muted-foreground">
-                          No subcategories found.
-                        </TableCell>
+                        <TableCell colSpan={4} className="text-center py-10 text-muted-foreground">No subcategories found.</TableCell>
                       </TableRow>
                     )}
                   </TableBody>
@@ -1213,10 +957,10 @@ function ProductsPage() {
               </div>
 
               {/* Mobile cards */}
-              <div className="flex flex-col gap-2 md:hidden">
+              <div className="flex flex-col gap-3 md:hidden">
                 {subItems.length ? subItems.map((sub) => (
-                  <div key={sub.id} className="rounded-lg border bg-card p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
+                  <div key={sub.id} className="rounded-lg border bg-card p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <Tag className="w-4 h-4 text-muted-foreground shrink-0" />
                         <span className="font-medium truncate">{sub.name}</span>
@@ -1224,9 +968,9 @@ function ProductsPage() {
                       <RoleGate {...access} requireAdmin>
                         <div className="flex items-center gap-1 shrink-0">
                           <SubcategoryDialog mode="edit" subcategory={sub} categories={categories} onSuccess={refresh} />
-                          <DeleteButton
-                            label="Subcategory"
-                            description={`Delete "${sub.name}"?`}
+                          <DeleteDialog
+                            title="Delete Subcategory"
+                            description={<>Are you sure you want to delete <strong>{sub.name}</strong>?</>}
                             disabled={sub.productCount > 0}
                             disabledReason={sub.productCount > 0 ? `${sub.productCount} product${sub.productCount === 1 ? '' : 's'} must be removed first.` : undefined}
                             onConfirm={async () => { await deleteSubcategory({ data: { id: sub.id } }); refresh() }}
@@ -1236,7 +980,7 @@ function ProductsPage() {
                     </div>
                     <div className="flex items-center justify-between">
                       <Badge variant="secondary" className="text-xs">{sub.categoryName}</Badge>
-                      <button onClick={() => drillToProds(sub.id)} className="flex items-center gap-1 text-xs text-primary hover:underline">
+                      <button onClick={() => drillToProds({ categoryId: sub.categoryId, subcategoryId: sub.id })} className="flex items-center gap-1.5 text-xs text-primary hover:underline">
                         <Package className="w-3 h-3" />
                         {sub.productCount} product{sub.productCount === 1 ? '' : 's'}
                       </button>
@@ -1247,18 +991,14 @@ function ProductsPage() {
                 )}
               </div>
 
-              <PaginationBar
-                page={subPage} pageCount={subPageCount}
-                total={subcategories.length} filtered={sortedSubs.length}
-                onPrev={() => setSubPage((p) => p - 1)}
-                onNext={() => setSubPage((p) => p + 1)}
-              />
+              <PaginationBar page={subPage} pageCount={subPageCount} total={subcategories.length} filtered={sortedSubs.length} onPrev={() => setSubPage((p) => p - 1)} onNext={() => setSubPage((p) => p + 1)} />
             </>
           )}
 
-          {/* ── PRODUCTS TAB ───────────────────────────────────────── */}
+          {/* ── PRODUCTS ───────────────────────────────────────────── */}
           {tab === 'products' && (
             <>
+              {/* Toolbar */}
               <div className="flex items-center gap-2 flex-wrap">
                 <div className="relative flex-1 min-w-0 md:max-w-sm">
                   <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground pointer-events-none" />
@@ -1272,8 +1012,8 @@ function ProductsPage() {
                 {filterCategoryId && (
                   <Badge
                     variant="secondary"
-                    className="gap-1 cursor-pointer hover:bg-destructive/10 hover:text-destructive transition-colors"
-                    onClick={clearCategoryFilter}
+                    className="gap-1 cursor-pointer hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
+                    onClick={() => { setFilterCategoryId(''); setFilterSubcategoryId('') }}
                   >
                     {activeCategoryName} ×
                   </Badge>
@@ -1281,20 +1021,14 @@ function ProductsPage() {
                 {filterSubcategoryId && (
                   <Badge
                     variant="outline"
-                    className="gap-1 cursor-pointer hover:bg-destructive/10 hover:text-destructive transition-colors"
-                    onClick={clearSubcategoryFilter}
+                    className="gap-1 cursor-pointer hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
+                    onClick={() => setFilterSubcategoryId('')}
                   >
                     {activeSubcategoryName} ×
                   </Badge>
                 )}
                 <RoleGate {...access} requireAdmin>
-                  <ProductDialog
-                    mode="create"
-                    categories={categories}
-                    subcategories={subcategories}
-                    defaultSubcategoryId={filterSubcategoryId}
-                    onSuccess={refresh}
-                  />
+                  <ProductDialog mode="create" categories={categories} subcategories={subcategories} defaultSubcategoryId={filterSubcategoryId} onSuccess={refresh} />
                 </RoleGate>
               </div>
 
@@ -1303,27 +1037,9 @@ function ProductsPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>
-                        <SortableHeader
-                          label="Product"
-                          sorted={prodSort.key === 'name' ? prodSort.dir : false}
-                          onToggle={() => toggleSort(prodSort, 'name', setProdSort, () => setProdPage(0))}
-                        />
-                      </TableHead>
-                      <TableHead>
-                        <SortableHeader
-                          label="Category"
-                          sorted={prodSort.key === 'categoryName' ? prodSort.dir : false}
-                          onToggle={() => toggleSort(prodSort, 'categoryName', setProdSort, () => setProdPage(0))}
-                        />
-                      </TableHead>
-                      <TableHead>
-                        <SortableHeader
-                          label="Subcategory"
-                          sorted={prodSort.key === 'subcategoryName' ? prodSort.dir : false}
-                          onToggle={() => toggleSort(prodSort, 'subcategoryName', setProdSort, () => setProdPage(0))}
-                        />
-                      </TableHead>
+                      <TableHead><SortBtn label="Product" sorted={prodSort.key === 'name' ? prodSort.dir : false} onToggle={() => toggleSort(prodSort, 'name', setProdSort, () => setProdPage(0))} /></TableHead>
+                      <TableHead><SortBtn label="Category" sorted={prodSort.key === 'categoryName' ? prodSort.dir : false} onToggle={() => toggleSort(prodSort, 'categoryName', setProdSort, () => setProdPage(0))} /></TableHead>
+                      <TableHead><SortBtn label="Subcategory" sorted={prodSort.key === 'subcategoryName' ? prodSort.dir : false} onToggle={() => toggleSort(prodSort, 'subcategoryName', setProdSort, () => setProdPage(0))} /></TableHead>
                       <TableHead>Unit</TableHead>
                       <TableHead>Active</TableHead>
                       <TableHead className="w-20" />
@@ -1333,12 +1049,8 @@ function ProductsPage() {
                     {prodItems.length ? prodItems.map((prod) => (
                       <TableRow key={prod.id}>
                         <TableCell className="font-medium">{prod.name}</TableCell>
-                        <TableCell>
-                          <Badge variant="secondary" className="text-xs font-normal">{prod.categoryName}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="text-xs font-normal">{prod.subcategoryName}</Badge>
-                        </TableCell>
+                        <TableCell><Badge variant="secondary" className="text-xs font-normal">{prod.categoryName}</Badge></TableCell>
+                        <TableCell><Badge variant="outline" className="text-xs font-normal">{prod.subcategoryName}</Badge></TableCell>
                         <TableCell className="text-xs text-muted-foreground">{prod.unit}</TableCell>
                         <TableCell>
                           <RoleGate {...access} requireAdmin fallback={
@@ -1348,10 +1060,7 @@ function ProductsPage() {
                           }>
                             <Switch
                               checked={prod.isActive}
-                              onCheckedChange={async (v) => {
-                                await toggleProductActive({ data: { id: prod.id, isActive: v } })
-                                refresh()
-                              }}
+                              onCheckedChange={async (v) => { await toggleProductActive({ data: { id: prod.id, isActive: v } }); refresh() }}
                             />
                           </RoleGate>
                         </TableCell>
@@ -1359,9 +1068,9 @@ function ProductsPage() {
                           <RoleGate {...access} requireAdmin>
                             <div className="flex items-center justify-end gap-1">
                               <ProductDialog mode="edit" product={prod} categories={categories} subcategories={subcategories} onSuccess={refresh} />
-                              <DeleteButton
-                                label="Product"
-                                description={`Delete "${prod.name}"? This cannot be undone.`}
+                              <DeleteDialog
+                                title="Delete Product"
+                                description={<>Are you sure you want to delete <strong>{prod.name}</strong>? This cannot be undone.</>}
                                 disabled={prod.transactionCount > 0}
                                 disabledReason={prod.transactionCount > 0 ? `${prod.transactionCount} transaction${prod.transactionCount === 1 ? '' : 's'} reference this product.` : undefined}
                                 onConfirm={async () => { await deleteProduct({ data: { id: prod.id } }); refresh() }}
@@ -1372,9 +1081,7 @@ function ProductsPage() {
                       </TableRow>
                     )) : (
                       <TableRow>
-                        <TableCell colSpan={6} className="text-center py-10 text-muted-foreground">
-                          No products found.
-                        </TableCell>
+                        <TableCell colSpan={6} className="text-center py-10 text-muted-foreground">No products found.</TableCell>
                       </TableRow>
                     )}
                   </TableBody>
@@ -1382,9 +1089,9 @@ function ProductsPage() {
               </div>
 
               {/* Mobile cards */}
-              <div className="flex flex-col gap-2 md:hidden">
+              <div className="flex flex-col gap-3 md:hidden">
                 {prodItems.length ? prodItems.map((prod) => (
-                  <div key={prod.id} className="rounded-lg border bg-card p-3 space-y-2">
+                  <div key={prod.id} className="rounded-lg border bg-card p-4 space-y-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <Package className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -1393,9 +1100,9 @@ function ProductsPage() {
                       <RoleGate {...access} requireAdmin>
                         <div className="flex items-center gap-1 shrink-0">
                           <ProductDialog mode="edit" product={prod} categories={categories} subcategories={subcategories} onSuccess={refresh} />
-                          <DeleteButton
-                            label="Product"
-                            description={`Delete "${prod.name}"?`}
+                          <DeleteDialog
+                            title="Delete Product"
+                            description={<>Are you sure you want to delete <strong>{prod.name}</strong>?</>}
                             disabled={prod.transactionCount > 0}
                             disabledReason={prod.transactionCount > 0 ? `${prod.transactionCount} transaction${prod.transactionCount === 1 ? '' : 's'} reference this product.` : undefined}
                             onConfirm={async () => { await deleteProduct({ data: { id: prod.id } }); refresh() }}
@@ -1417,14 +1124,9 @@ function ProductsPage() {
                         <div className="flex items-center gap-2">
                           <Switch
                             checked={prod.isActive}
-                            onCheckedChange={async (v) => {
-                              await toggleProductActive({ data: { id: prod.id, isActive: v } })
-                              refresh()
-                            }}
+                            onCheckedChange={async (v) => { await toggleProductActive({ data: { id: prod.id, isActive: v } }); refresh() }}
                           />
-                          <span className="text-xs text-muted-foreground">
-                            {prod.isActive ? 'Active' : 'Inactive'}
-                          </span>
+                          <span className="text-xs text-muted-foreground">{prod.isActive ? 'Active' : 'Inactive'}</span>
                         </div>
                       </RoleGate>
                     </div>
@@ -1434,12 +1136,7 @@ function ProductsPage() {
                 )}
               </div>
 
-              <PaginationBar
-                page={prodPage} pageCount={prodPageCount}
-                total={filteredProducts.length} filtered={sortedProds.length}
-                onPrev={() => setProdPage((p) => p - 1)}
-                onNext={() => setProdPage((p) => p + 1)}
-              />
+              <PaginationBar page={prodPage} pageCount={prodPageCount} total={filteredProducts.length} filtered={sortedProds.length} onPrev={() => setProdPage((p) => p - 1)} onNext={() => setProdPage((p) => p + 1)} />
             </>
           )}
 

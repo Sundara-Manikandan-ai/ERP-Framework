@@ -18,6 +18,7 @@ import { Route as LayoutUploadRouteImport } from './routes/_layout/upload'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
 import { Route as LayoutRolesRouteImport } from './routes/_layout/roles'
 import { Route as LayoutProfileRouteImport } from './routes/_layout/profile'
+import { Route as LayoutProductsRouteImport } from './routes/_layout/products'
 import { Route as LayoutPagesRouteImport } from './routes/_layout/pages'
 import { Route as LayoutBranchesRouteImport } from './routes/_layout/branches'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
@@ -66,6 +67,11 @@ const LayoutProfileRoute = LayoutProfileRouteImport.update({
   path: '/profile',
   getParentRoute: () => LayoutRouteRoute,
 } as any)
+const LayoutProductsRoute = LayoutProductsRouteImport.update({
+  id: '/products',
+  path: '/products',
+  getParentRoute: () => LayoutRouteRoute,
+} as any)
 const LayoutPagesRoute = LayoutPagesRouteImport.update({
   id: '/pages',
   path: '/pages',
@@ -88,6 +94,7 @@ export interface FileRoutesByFullPath {
   '/register': typeof RegisterRoute
   '/branches': typeof LayoutBranchesRoute
   '/pages': typeof LayoutPagesRoute
+  '/products': typeof LayoutProductsRoute
   '/profile': typeof LayoutProfileRoute
   '/roles': typeof LayoutRolesRoute
   '/settings': typeof LayoutSettingsRoute
@@ -100,6 +107,7 @@ export interface FileRoutesByTo {
   '/register': typeof RegisterRoute
   '/branches': typeof LayoutBranchesRoute
   '/pages': typeof LayoutPagesRoute
+  '/products': typeof LayoutProductsRoute
   '/profile': typeof LayoutProfileRoute
   '/roles': typeof LayoutRolesRoute
   '/settings': typeof LayoutSettingsRoute
@@ -115,6 +123,7 @@ export interface FileRoutesById {
   '/register': typeof RegisterRoute
   '/_layout/branches': typeof LayoutBranchesRoute
   '/_layout/pages': typeof LayoutPagesRoute
+  '/_layout/products': typeof LayoutProductsRoute
   '/_layout/profile': typeof LayoutProfileRoute
   '/_layout/roles': typeof LayoutRolesRoute
   '/_layout/settings': typeof LayoutSettingsRoute
@@ -131,6 +140,7 @@ export interface FileRouteTypes {
     | '/register'
     | '/branches'
     | '/pages'
+    | '/products'
     | '/profile'
     | '/roles'
     | '/settings'
@@ -143,6 +153,7 @@ export interface FileRouteTypes {
     | '/register'
     | '/branches'
     | '/pages'
+    | '/products'
     | '/profile'
     | '/roles'
     | '/settings'
@@ -157,6 +168,7 @@ export interface FileRouteTypes {
     | '/register'
     | '/_layout/branches'
     | '/_layout/pages'
+    | '/_layout/products'
     | '/_layout/profile'
     | '/_layout/roles'
     | '/_layout/settings'
@@ -238,6 +250,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutProfileRouteImport
       parentRoute: typeof LayoutRouteRoute
     }
+    '/_layout/products': {
+      id: '/_layout/products'
+      path: '/products'
+      fullPath: '/products'
+      preLoaderRoute: typeof LayoutProductsRouteImport
+      parentRoute: typeof LayoutRouteRoute
+    }
     '/_layout/pages': {
       id: '/_layout/pages'
       path: '/pages'
@@ -265,6 +284,7 @@ declare module '@tanstack/react-router' {
 interface LayoutRouteRouteChildren {
   LayoutBranchesRoute: typeof LayoutBranchesRoute
   LayoutPagesRoute: typeof LayoutPagesRoute
+  LayoutProductsRoute: typeof LayoutProductsRoute
   LayoutProfileRoute: typeof LayoutProfileRoute
   LayoutRolesRoute: typeof LayoutRolesRoute
   LayoutSettingsRoute: typeof LayoutSettingsRoute
@@ -276,6 +296,7 @@ interface LayoutRouteRouteChildren {
 const LayoutRouteRouteChildren: LayoutRouteRouteChildren = {
   LayoutBranchesRoute: LayoutBranchesRoute,
   LayoutPagesRoute: LayoutPagesRoute,
+  LayoutProductsRoute: LayoutProductsRoute,
   LayoutProfileRoute: LayoutProfileRoute,
   LayoutRolesRoute: LayoutRolesRoute,
   LayoutSettingsRoute: LayoutSettingsRoute,

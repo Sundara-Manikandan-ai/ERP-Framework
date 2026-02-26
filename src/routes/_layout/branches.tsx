@@ -17,6 +17,7 @@ import { adminMiddleware } from '#/middleware/admin'
 import { resourceMiddleware } from '#/middleware/resource'
 import { extractAccess } from '#/lib/rbac'
 import { RoleGate } from '@/components/shared/RoleGate'
+import { DeleteDialog } from '@/components/shared/DeleteDialog'
 import { getErrorMessage } from '@/lib/utils'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
@@ -53,18 +54,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Loader2,
   PlusCircle,
@@ -326,8 +315,6 @@ function BranchesPage() {
   const [sorting, setSorting]                   = useState<SortingState>([])
   const [globalFilter, setGlobalFilter]         = useState('')
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
-  const [deleteError, setDeleteError]           = useState<string | null>(null)
-
   function refresh() { router.invalidate() }
 
   const data: BranchRow[] = useMemo(
@@ -419,60 +406,20 @@ function BranchesPage() {
             <RoleGate {...access} requireAdmin>
               <div className="flex items-center justify-end gap-1">
                 <EditBranchDialog branch={branch} onSuccess={refresh} />
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive hover:text-destructive"
-                      onClick={() => setDeleteError(null)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Delete Branch</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Are you sure you want to delete <strong>{branch.name}</strong>? This cannot be undone.
-                        {branch.userCount > 0 && (
-                          <span className="block mt-2 text-destructive font-medium">
-                            ⚠ This branch has {branch.userCount} assigned user{branch.userCount !== 1 ? 's' : ''} and cannot be deleted.
-                          </span>
-                        )}
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    {deleteError && (
-                      <Alert variant="destructive">
-                        <AlertDescription>{deleteError}</AlertDescription>
-                      </Alert>
-                    )}
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction
-                        className="bg-destructive text-white hover:bg-destructive/90"
-                        disabled={branch.userCount > 0}
-                        onClick={async () => {
-                          try {
-                            await deleteBranch({ data: { id: branch.id } })
-                            refresh()
-                          } catch (e: unknown) {
-                            setDeleteError(getErrorMessage(e, 'Failed to delete branch.'))
-                          }
-                        }}
-                      >
-                        Delete
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+                <DeleteDialog
+                  title="Delete Branch"
+                  description={<>Are you sure you want to delete <strong>{branch.name}</strong>? This cannot be undone.</>}
+                  disabled={branch.userCount > 0}
+                  disabledReason={branch.userCount > 0 ? `This branch has ${branch.userCount} assigned user${branch.userCount !== 1 ? 's' : ''} and cannot be deleted.` : undefined}
+                  onConfirm={async () => { await deleteBranch({ data: { id: branch.id } }); refresh() }}
+                />
               </div>
             </RoleGate>
           )
         },
       },
     ],
-    [access, deleteError]
+    [access]
   )
 
   const table = useReactTable({
@@ -593,53 +540,13 @@ function BranchesPage() {
                       <RoleGate {...access} requireAdmin>
                         <div className="flex items-center gap-1 shrink-0">
                           <EditBranchDialog branch={branch} onSuccess={refresh} />
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="text-destructive hover:text-destructive"
-                                onClick={() => setDeleteError(null)}
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Delete Branch</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  Are you sure you want to delete <strong>{branch.name}</strong>? This cannot be undone.
-                                  {branch.userCount > 0 && (
-                                    <span className="block mt-2 text-destructive font-medium">
-                                      ⚠ This branch has {branch.userCount} assigned user{branch.userCount !== 1 ? 's' : ''} and cannot be deleted.
-                                    </span>
-                                  )}
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              {deleteError && (
-                                <Alert variant="destructive">
-                                  <AlertDescription>{deleteError}</AlertDescription>
-                                </Alert>
-                              )}
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction
-                                  className="bg-destructive text-white hover:bg-destructive/90"
-                                  disabled={branch.userCount > 0}
-                                  onClick={async () => {
-                                    try {
-                                      await deleteBranch({ data: { id: branch.id } })
-                                      refresh()
-                                    } catch (e: unknown) {
-                                      setDeleteError(getErrorMessage(e, 'Failed to delete branch.'))
-                                    }
-                                  }}
-                                >
-                                  Delete
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
+                          <DeleteDialog
+                            title="Delete Branch"
+                            description={<>Are you sure you want to delete <strong>{branch.name}</strong>? This cannot be undone.</>}
+                            disabled={branch.userCount > 0}
+                            disabledReason={branch.userCount > 0 ? `This branch has ${branch.userCount} assigned user${branch.userCount !== 1 ? 's' : ''} and cannot be deleted.` : undefined}
+                            onConfirm={async () => { await deleteBranch({ data: { id: branch.id } }); refresh() }}
+                          />
                         </div>
                       </RoleGate>
                     </div>

@@ -1,7 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { db } from '#/lib/db'
-import { resourceMiddleware } from '#/middleware/resource'
+import { authMiddleware } from '#/middleware/auth'
+import { Unauthorized } from '@/components/shared/Unauthorized'
 import { LayoutDashboard, Users, Shield, Activity } from 'lucide-react'
 import {
   Card,
@@ -11,8 +12,18 @@ import {
 } from '@/components/ui/card'
 
 const getDashboardStats = createServerFn({ method: 'GET' })
-  .middleware([resourceMiddleware('dashboard')])
-  .handler(async () => {
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const hasDashboard =
+      context.isAdmin ||
+      context.permissions.some(
+        (p) => p.resource === 'dashboard' && p.actions.includes('view')
+      )
+
+    if (!hasDashboard) {
+      return { authorized: false as const }
+    }
+
     const [totalUsers, totalRoles, totalBranches, roleCounts] = await Promise.all([
       db.user.count(),
       db.role.count(),
@@ -35,6 +46,7 @@ const getDashboardStats = createServerFn({ method: 'GET' })
     }
 
     return {
+      authorized: true as const,
       totalUsers,
       totalRoles,
       totalBranches,
@@ -49,14 +61,18 @@ export const Route = createFileRoute('/_layout/')({
 })
 
 function DashboardPage() {
-  const { totalUsers, admins, managers, totalRoles, totalBranches } = Route.useLoaderData()
+  const data = Route.useLoaderData()
+
+  if (!data.authorized) return <Unauthorized />
+
+  const { totalUsers, admins, managers, totalRoles, totalBranches } = data
 
   const stats = [
-    { title: 'Total Users',  value: totalUsers,    icon: Users,          description: 'Registered accounts'    },
-    { title: 'Admins',       value: admins,         icon: Shield,         description: 'Administrator accounts' },
-    { title: 'MIS Users',    value: managers,       icon: Activity,       description: 'MIS accounts'           },
-    { title: 'Branches',     value: totalBranches,  icon: LayoutDashboard, description: 'Active branches'       },
-    { title: 'Roles',        value: totalRoles,     icon: Shield,         description: 'Defined roles'          },
+    { title: 'Total Users',  value: totalUsers,     icon: Users,           description: 'Registered accounts'    },
+    { title: 'Admins',       value: admins,          icon: Shield,          description: 'Administrator accounts' },
+    { title: 'MIS Users',    value: managers,        icon: Activity,        description: 'MIS accounts'           },
+    { title: 'Branches',     value: totalBranches,   icon: LayoutDashboard, description: 'Active branches'        },
+    { title: 'Roles',        value: totalRoles,      icon: Shield,          description: 'Defined roles'          },
   ]
 
   return (

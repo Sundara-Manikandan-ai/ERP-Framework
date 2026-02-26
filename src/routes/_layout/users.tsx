@@ -18,6 +18,7 @@ import { resourceMiddleware } from '#/middleware/resource'
 import { extractAccess } from '#/lib/rbac'
 import { createUserSchema, type CreateUserInput } from '#/lib/user'
 import { RoleGate } from '@/components/shared/RoleGate'
+import { DeleteDialog } from '@/components/shared/DeleteDialog'
 import { getErrorMessage } from '@/lib/utils'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
@@ -60,18 +61,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Loader2,
   UserPlus,
@@ -530,30 +519,11 @@ function UsersPage() {
                   branches={branches}
                   onSuccess={refresh}
                 />
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive">
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Delete User</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Are you sure you want to delete <strong>{user.name}</strong>? This cannot be undone.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction
-                        className="bg-destructive text-white hover:bg-destructive/90"
-                        onClick={async () => { await deleteUser({ data: { userId: user.id } }); refresh() }}
-                      >
-                        Delete
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+                <DeleteDialog
+                  title="Delete User"
+                  description={<>Are you sure you want to delete <strong>{user.name}</strong>? This cannot be undone.</>}
+                  onConfirm={async () => { await deleteUser({ data: { userId: user.id } }); refresh() }}
+                />
               </div>
             </RoleGate>
           )
@@ -688,30 +658,11 @@ function UsersPage() {
                             branches={branches}
                             onSuccess={refresh}
                           />
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive">
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Delete User</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  Are you sure you want to delete <strong>{user.name}</strong>? This cannot be undone.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction
-                                  className="bg-destructive text-white hover:bg-destructive/90"
-                                  onClick={async () => { await deleteUser({ data: { userId: user.id } }); refresh() }}
-                                >
-                                  Delete
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
+                          <DeleteDialog
+                            title="Delete User"
+                            description={<>Are you sure you want to delete <strong>{user.name}</strong>? This cannot be undone.</>}
+                            onConfirm={async () => { await deleteUser({ data: { userId: user.id } }); refresh() }}
+                          />
                         </div>
                       </RoleGate>
                     </div>

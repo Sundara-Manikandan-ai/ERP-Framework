@@ -56,7 +56,7 @@ import {
   Eye,
   X,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, getErrorMessage } from '@/lib/utils'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -161,9 +161,10 @@ const processUpload = createServerFn({ method: 'POST' })
         await tx.uploadBatch.deleteMany({
           where: {
             transactionTypeId: data.transactionTypeId,
-            branchId: data.branchId ?? null,
+            branchId:  data.branchId  ?? null,
+            factoryId: data.factoryId ?? null,
             dateFrom: new Date(data.dateFrom),
-            dateTo: new Date(data.dateTo),
+            dateTo:   new Date(data.dateTo),
           },
         })
       }
@@ -178,7 +179,8 @@ const processUpload = createServerFn({ method: 'POST' })
           dateFrom: new Date(data.dateFrom),
           dateTo: new Date(data.dateTo),
           transactionTypeId: data.transactionTypeId,
-          branchId: data.branchId ?? null,
+          branchId:  data.branchId  ?? null,
+          factoryId: data.factoryId ?? null,
         },
       })
 

@@ -202,6 +202,7 @@ async function main() {
     { resource: 'roles',     label: 'Roles',     path: '/roles',    icon: 'Shield',          navGroupId: adminGroup.id, order: 3 },
     { resource: 'pages',     label: 'Pages',     path: '/pages',    icon: 'Layout',          navGroupId: adminGroup.id, order: 4 },
     { resource: 'upload',    label: 'Upload',    path: '/upload',   icon: 'Upload',          navGroupId: adminGroup.id, order: 5 },
+    { resource: 'products',  label: 'Products',  path: '/products', icon: 'Package',         navGroupId: adminGroup.id, order: 6 },
     { resource: 'settings',  label: 'Settings',  path: '/settings', icon: 'Settings',        navGroupId: null,          order: 8 },
   ]
 
