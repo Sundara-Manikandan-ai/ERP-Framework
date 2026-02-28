@@ -1,11 +1,42 @@
-import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
+import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useState } from 'react'
+import { createServerFn } from '@tanstack/react-start'
 import { signIn } from '#/lib/auth-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Loader2, LogIn, Leaf } from 'lucide-react'
+import { loginSchema } from '#/lib/validators'
+import { checkLockout, recordFailedAttempt, checkIpRateLimit, recordIpFailure } from '#/lib/auth'
+import { getRequestHeaders } from '@tanstack/react-start/server'
+
+// ── Server functions (module-level) ───────────────────────────────────────────
+
+const checkLockoutFn = createServerFn({ method: 'POST' })
+  .inputValidator((email: string) => email)
+  .handler(async ({ data: email }) => {
+    // Check IP-based rate limit first
+    const headers = getRequestHeaders()
+    const ip = headers['x-forwarded-for']?.split(',')[0]?.trim() ?? headers['x-real-ip'] ?? 'unknown'
+    const ipCheck = checkIpRateLimit(ip)
+    if (ipCheck.blocked) {
+      return { locked: true, minutesLeft: ipCheck.minutesLeft }
+    }
+
+    return checkLockout(email)
+  })
+
+const recordFailedFn = createServerFn({ method: 'POST' })
+  .inputValidator((d: { email: string }) => d)
+  .handler(async ({ data }) => {
+    const headers = getRequestHeaders()
+    const ip = headers['x-forwarded-for']?.split(',')[0]?.trim() ?? headers['x-real-ip'] ?? 'unknown'
+    recordIpFailure(ip)
+    await recordFailedAttempt(data.email, ip)
+  })
+
+// ── Route ─────────────────────────────────────────────────────────────────────
 
 export const Route = createFileRoute('/login')({
   component: LoginPage,
@@ -14,33 +45,47 @@ export const Route = createFileRoute('/login')({
 function LoginPage() {
   const router = useRouter()
 
-  const [email, setEmail]           = useState('')
-  const [password, setPassword]     = useState('')
-  const [errors, setErrors]         = useState<{ email?: string; password?: string }>({})
+  const [email, setEmail]             = useState('')
+  const [password, setPassword]       = useState('')
+  const [errors, setErrors]           = useState<{ email?: string; password?: string }>({})
   const [serverError, setServerError] = useState<string | null>(null)
-  const [isPending, setIsPending]   = useState(false)
-
-  function validate() {
-    const next: typeof errors = {}
-    if (!email) next.email = 'Email is required'
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) next.email = 'Enter a valid email address'
-    if (!password) next.password = 'Password is required'
-    return next
-  }
+  const [isPending, setIsPending]     = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setServerError(null)
-    const next = validate()
-    if (Object.keys(next).length > 0) { setErrors(next); return }
+
+    const result = loginSchema.safeParse({ email, password })
+    if (!result.success) {
+      const fieldErrors: typeof errors = {}
+      for (const issue of result.error.issues) {
+        const field = issue.path[0] as keyof typeof errors
+        if (!fieldErrors[field]) fieldErrors[field] = issue.message
+      }
+      setErrors(fieldErrors)
+      return
+    }
+
     setErrors({})
     setIsPending(true)
+
+    // Check lockout before attempting sign in
+    const { locked, minutesLeft } = await checkLockoutFn({ data: email })
+    if (locked) {
+      setServerError(`Account temporarily locked. Try again in ${minutesLeft} minute${minutesLeft === 1 ? '' : 's'}.`)
+      setIsPending(false)
+      return
+    }
+
     const { error } = await signIn.email({ email, password, callbackURL: '/' })
+
     if (error) {
+      await recordFailedFn({ data: { email } })
       setServerError(error.message ?? 'Invalid email or password.')
       setIsPending(false)
       return
     }
+
     await router.navigate({ to: '/' })
   }
 
@@ -52,7 +97,6 @@ function LoginPage() {
         className="hidden lg:flex lg:w-[42%] flex-col justify-between p-10 relative overflow-hidden"
         style={{ background: 'var(--sidebar)' }}
       >
-        {/* Decorative circles */}
         <div
           className="absolute -top-24 -left-24 w-96 h-96 rounded-full opacity-10"
           style={{ background: 'radial-gradient(circle, oklch(0.60 0.18 160), transparent 70%)' }}
@@ -62,7 +106,6 @@ function LoginPage() {
           style={{ background: 'radial-gradient(circle, oklch(0.60 0.18 160), transparent 70%)' }}
         />
 
-        {/* Logo */}
         <div className="flex items-center gap-2.5 relative z-10">
           <div
             className="flex items-center justify-center w-8 h-8 rounded-lg"
@@ -75,7 +118,6 @@ function LoginPage() {
           </span>
         </div>
 
-        {/* Tagline */}
         <div className="relative z-10 space-y-3">
           <h2
             className="text-2xl font-bold leading-snug"
@@ -88,7 +130,6 @@ function LoginPage() {
           </p>
         </div>
 
-        {/* Footer */}
         <p className="text-xs relative z-10" style={{ color: 'oklch(0.45 0.020 160)' }}>
           © {new Date().getFullYear()} MIS Enterprise
         </p>
@@ -97,7 +138,6 @@ function LoginPage() {
       {/* ── Right panel — form ───────────────────────────────────────── */}
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-12">
 
-        {/* Mobile logo */}
         <div className="flex items-center gap-2 mb-8 lg:hidden">
           <div
             className="flex items-center justify-center w-8 h-8 rounded-lg"
@@ -110,13 +150,11 @@ function LoginPage() {
 
         <div className="w-full max-w-[340px] space-y-5">
 
-          {/* Heading */}
           <div className="space-y-1">
             <h1 className="text-2xl font-bold tracking-tight">Sign in</h1>
             <p className="text-sm text-muted-foreground">Enter your credentials to access your workspace</p>
           </div>
 
-          {/* Form */}
           <form onSubmit={handleSubmit} noValidate className="space-y-4">
 
             {serverError && (
@@ -164,10 +202,7 @@ function LoginPage() {
           </form>
 
           <p className="text-center text-sm text-muted-foreground">
-            Don't have an account?{' '}
-            <Link to="/register" className="font-medium text-foreground hover:underline underline-offset-4">
-              Create one
-            </Link>
+            Contact your administrator if you need an account.
           </p>
 
         </div>

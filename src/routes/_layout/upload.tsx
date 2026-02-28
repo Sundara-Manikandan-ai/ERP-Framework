@@ -2,6 +2,7 @@ import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { useState, useCallback, useRef } from 'react'
 import * as XLSX from 'xlsx'
+import { authMiddleware } from '#/middleware/auth'
 import { resourceMiddleware } from '#/middleware/resource'
 import { db } from '#/lib/db'
 import { Button } from '@/components/ui/button'
@@ -93,12 +94,18 @@ type UploadBatchRow = {
 // ── Server Functions ───────────────────────────────────────────────
 
 const getPageData = createServerFn({ method: 'GET' })
-  .middleware([resourceMiddleware('upload')])
-  .handler(async () => {
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const hasAccess =
+      context.isAdmin ||
+      context.permissions.some((p) => p.resource === 'upload' && p.actions.includes('view'))
+
+    if (!hasAccess) return { authorized: false as const }
+
     const [branches, factories, transactionTypes, recentBatches] = await Promise.all([
-      db.branch.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } }),
-      db.factory.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } }),
-      db.transactionType.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } }),
+      db.branch.findMany({ where: { isActive: true, deletedAt: null }, orderBy: { name: 'asc' } }),
+      db.factory.findMany({ where: { isActive: true, deletedAt: null }, orderBy: { name: 'asc' } }),
+      db.transactionType.findMany({ where: { isActive: true, deletedAt: null }, orderBy: { name: 'asc' } }),
       db.uploadBatch.findMany({
         orderBy: { uploadedAt: 'desc' },
         take: 50,
@@ -110,6 +117,7 @@ const getPageData = createServerFn({ method: 'GET' })
     ])
 
     return {
+      authorized: true as const,
       branches,
       factories,
       transactionTypes,
@@ -155,6 +163,13 @@ const processUpload = createServerFn({ method: 'POST' })
     }) => data
   )
   .handler(async ({ data, context }) => {
+    // ── Branch authorization: non-admins can only upload to their assigned branches ──
+    if (!context.isAdmin && data.branchId) {
+      if (!context.branchIds.includes(data.branchId)) {
+        throw new Error('You are not authorized to upload data for this branch.')
+      }
+    }
+
     return await db.$transaction(async (tx) => {
       // ── If replacing, delete existing batches for this exact scope ──
       if (data.replaceExisting) {
@@ -361,7 +376,6 @@ const deleteBatch = createServerFn({ method: 'POST' })
 
 export const Route = createFileRoute('/_layout/upload')({
   loader: () => getPageData(),
-  errorComponent: () => <Unauthorized />,
   component: UploadPage,
 })
 
@@ -420,8 +434,10 @@ function statusBadge(status: string) {
 // ── Main Page ──────────────────────────────────────────────────────
 
 function UploadPage() {
+  const loaderData = Route.useLoaderData()
+  if (!loaderData.authorized) return <Unauthorized />
   const router = useRouter()
-  const { branches, factories, transactionTypes, recentBatches } = Route.useLoaderData()
+  const { branches, factories, transactionTypes, recentBatches } = loaderData
 
   // ── Upload scope state ──
   const [transactionTypeId, setTransactionTypeId] = useState('')
