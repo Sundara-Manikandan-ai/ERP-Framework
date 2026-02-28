@@ -15,7 +15,7 @@ import {
 import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
 import { authMiddleware } from '#/middleware/auth'
-import { extractAccess } from '#/lib/rbac'
+import { extractAccess, invalidateAccessCache } from '#/lib/rbac'
 import { logAudit } from '#/lib/logger'
 import { createUserSchema, type CreateUserInput } from '#/lib/user'
 import { RoleGate } from '@/components/shared/RoleGate'
@@ -194,6 +194,7 @@ const deleteUser = createServerFn({ method: 'POST' })
 
     const old = await db.user.findUnique({ where: { id: data.userId }, select: { name: true, email: true } })
     await db.user.delete({ where: { id: data.userId } })
+    invalidateAccessCache(data.userId)
     logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'users', resourceId: data.userId, oldValue: old ?? undefined }).catch(() => {})
     return { success: true }
   })
@@ -216,6 +217,7 @@ const updateUserRole = createServerFn({ method: 'POST' })
       })
     })
 
+    invalidateAccessCache(data.userId)
     logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'users', resourceId: data.userId, newValue: { role: data.roleName, branchId: data.branchId } }).catch(() => {})
     return { success: true }
   })

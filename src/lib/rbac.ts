@@ -1,5 +1,17 @@
 import { db } from '#/lib/db'
 
+// ── Permission cache (5-minute TTL) ─────────────────────────────────────────
+const CACHE_TTL_MS = 5 * 60 * 1000
+const accessCache = new Map<string, { data: UserAccess; expiresAt: number }>()
+
+export function invalidateAccessCache(userId?: string) {
+  if (userId) {
+    accessCache.delete(userId)
+  } else {
+    accessCache.clear()
+  }
+}
+
 export type UserAccess = {
   isAdmin: boolean
   roles: {
@@ -16,6 +28,11 @@ export type UserAccess = {
 }
 
 export async function getUserAccess(userId: string): Promise<UserAccess> {
+  const cached = accessCache.get(userId)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data
+  }
+
   const userRoles = await db.userRole.findMany({
     where: { userId },
     include: {
@@ -43,7 +60,7 @@ export async function getUserAccess(userId: string): Promise<UserAccess> {
     ),
   ]
 
-  return {
+  const result: UserAccess = {
     isAdmin,
     roles: userRoles.map((ur) => ({
       name: ur.role.name,
@@ -57,6 +74,9 @@ export async function getUserAccess(userId: string): Promise<UserAccess> {
       actions: Array.from(actions),
     })),
   }
+
+  accessCache.set(userId, { data: result, expiresAt: Date.now() + CACHE_TTL_MS })
+  return result
 }
 
 // Extracts the access shape returned by getPageData server handlers

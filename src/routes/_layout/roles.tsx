@@ -14,7 +14,7 @@ import {
 import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
 import { authMiddleware } from '#/middleware/auth'
-import { extractAccess } from '#/lib/rbac'
+import { extractAccess, invalidateAccessCache } from '#/lib/rbac'
 import { logAudit } from '#/lib/logger'
 import { DeleteDialog } from '@/components/shared/DeleteDialog'
 import { RoleGate } from '@/components/shared/RoleGate'
@@ -222,6 +222,7 @@ const updateRole = createServerFn({ method: 'POST' })
       }
     })
 
+    invalidateAccessCache() // role permissions changed — clear all cached access
     logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'roles', resourceId: data.id, oldValue: old ? { name: old.name } : undefined, newValue: { name: data.name } }).catch(() => {})
     return { success: true }
   })
@@ -244,6 +245,7 @@ const softDeleteRole = createServerFn({ method: 'POST' })
       data: { deletedAt: new Date(), deletedBy: context.user.email },
     })
 
+    invalidateAccessCache() // role removed — clear all cached access
     logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'roles', resourceId: data.id, oldValue: { name: role.name } }).catch(() => {})
     return { success: true }
   })
@@ -298,6 +300,7 @@ const assignRole = createServerFn({ method: 'POST' })
       },
     })
 
+    invalidateAccessCache(data.userId)
     return { success: true }
   })
 
