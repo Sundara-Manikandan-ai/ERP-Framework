@@ -1,4 +1,5 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
+import { ExportButton } from '@/components/shared/ExportButton'
 import { createServerFn } from '@tanstack/react-start'
 import { useState, useMemo } from 'react'
 import { db } from '#/lib/db'
@@ -1017,6 +1018,16 @@ function ProductsPage() {
                     className="pl-8"
                   />
                 </div>
+                <ExportButton
+                  filename="products"
+                  sheetName="Products"
+                  data={sortedProds.map((p) => ({
+                    Name: p.name,
+                    Category: p.categoryName,
+                    Subcategory: p.subcategoryName,
+                    Unit: p.unit,
+                  }))}
+                />
                 {filterCategoryId && (
                   <Badge
                     variant="secondary"

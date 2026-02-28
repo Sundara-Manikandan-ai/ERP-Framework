@@ -1,4 +1,5 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
+import { ExportButton } from '@/components/shared/ExportButton'
 import { createServerFn } from '@tanstack/react-start'
 import { useState, useMemo } from 'react'
 import {
@@ -546,6 +547,16 @@ function BranchesPage() {
               value={globalFilter}
               onChange={(e) => setGlobalFilter(e.target.value)}
               className="flex-1 md:max-w-sm"
+            />
+            <ExportButton
+              filename="branches"
+              sheetName="Branches"
+              data={table.getFilteredRowModel().rows.map((r) => ({
+                Name: r.original.name,
+                Address: r.original.address ?? '',
+                Users: r.original.userCount,
+                Created: new Date(r.original.createdAt).toLocaleDateString('en-IN'),
+              }))}
             />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

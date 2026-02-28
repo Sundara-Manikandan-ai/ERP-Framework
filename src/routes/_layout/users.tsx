@@ -21,6 +21,7 @@ import { createUserSchema, type CreateUserInput } from '#/lib/user'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { DeleteDialog } from '@/components/shared/DeleteDialog'
 import { getErrorMessage } from '@/lib/utils'
+import { ExportButton } from '@/components/shared/ExportButton'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -608,6 +609,16 @@ function UsersPage() {
               value={globalFilter}
               onChange={(e) => setGlobalFilter(e.target.value)}
               className="max-w-sm"
+            />
+            <ExportButton
+              filename="users"
+              sheetName="Users"
+              data={table.getFilteredRowModel().rows.map((r) => ({
+                Name: r.original.name,
+                Email: r.original.email,
+                Roles: r.original.roles.map((ro) => ro.branchName ? `${ro.roleName} (${ro.branchName})` : ro.roleName).join(', '),
+                Joined: new Date(r.original.createdAt).toLocaleDateString('en-IN'),
+              }))}
             />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

@@ -72,6 +72,7 @@ import {
 } from 'lucide-react'
 import { z } from 'zod'
 import { cn, getErrorMessage } from '@/lib/utils'
+import { ExportButton } from '@/components/shared/ExportButton'
 import { ALL_RESOURCES, ALL_ACTIONS, type Resource, type Action } from '#/lib/constants'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -872,6 +873,17 @@ function RolesPage() {
               value={globalFilter}
               onChange={(e) => setGlobalFilter(e.target.value)}
               className="flex-1 md:max-w-sm"
+            />
+            <ExportButton
+              filename="roles"
+              sheetName="Roles"
+              data={table.getFilteredRowModel().rows.map((r) => ({
+                Name: r.original.name,
+                Type: r.original.type,
+                Description: r.original.description ?? '',
+                Users: r.original.userCount,
+                Pages: r.original.pagePermissions.map((p) => p.resource).join(', '),
+              }))}
             />
           </div>
 

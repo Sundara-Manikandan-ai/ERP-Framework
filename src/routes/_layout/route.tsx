@@ -1,6 +1,7 @@
 import { createFileRoute, Outlet, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { Sidebar } from '@/components/shared/Sidebar'
+import { CommandPalette } from '@/components/shared/CommandPalette'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,7 +11,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Badge } from '@/components/ui/badge'
-import { LogOut, User, Shield } from 'lucide-react'
+import { LogOut, User, Shield, Sun, Moon, Monitor } from 'lucide-react'
+import { useTheme } from '#/hooks/useTheme'
 import { authMiddleware } from '#/middleware/auth'
 import { db } from '#/lib/db'
 import { signOut } from '#/lib/auth-client'
@@ -65,6 +67,7 @@ function LayoutComponent() {
   const router  = useRouter()
   const session = Route.useLoaderData()
   const user    = session?.user
+  const { theme, setTheme } = useTheme()
 
   async function handleLogout() {
     await signOut()
@@ -138,6 +141,20 @@ function LayoutComponent() {
                 </>
               )}
               <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-[10px] font-normal text-muted-foreground py-1">Theme</DropdownMenuLabel>
+              <DropdownMenuItem className="text-xs" onClick={() => setTheme('light')}>
+                <Sun className="w-3.5 h-3.5 mr-2" />
+                Light {theme === 'light' && '✓'}
+              </DropdownMenuItem>
+              <DropdownMenuItem className="text-xs" onClick={() => setTheme('dark')}>
+                <Moon className="w-3.5 h-3.5 mr-2" />
+                Dark {theme === 'dark' && '✓'}
+              </DropdownMenuItem>
+              <DropdownMenuItem className="text-xs" onClick={() => setTheme('system')}>
+                <Monitor className="w-3.5 h-3.5 mr-2" />
+                System {theme === 'system' && '✓'}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 className="text-xs text-destructive"
                 onClick={handleLogout}
@@ -153,6 +170,12 @@ function LayoutComponent() {
           <Outlet />
         </main>
       </div>
+
+      <CommandPalette
+        pages={(session?.pages ?? []).filter((p) =>
+          session?.isAdmin || session?.permissions?.some((perm) => perm.resource === p.resource && perm.actions.includes('view'))
+        )}
+      />
     </div>
   )
 }
