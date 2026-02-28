@@ -14,10 +14,12 @@ import {
 } from '@tanstack/react-table'
 import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
-import { resourceMiddleware } from '#/middleware/resource'
+import { authMiddleware } from '#/middleware/auth'
 import { extractAccess } from '#/lib/rbac'
+import { logAudit } from '#/lib/logger'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { DeleteDialog } from '@/components/shared/DeleteDialog'
+import { ArchivedRecordsDrawer, type ArchivedRecord } from '@/components/shared/ArchivedRecordsDrawer'
 import { getErrorMessage } from '@/lib/utils'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
@@ -25,6 +27,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Card,
   CardContent,
@@ -57,7 +60,6 @@ import {
 import {
   Loader2,
   PlusCircle,
-  Trash2,
   Pencil,
   ArrowUpDown,
   ArrowUp,
@@ -83,7 +85,7 @@ type BranchRow = {
 // ── Validation ────────────────────────────────────────────────────────────────
 
 const branchSchema = z.object({
-  name:    z.string().min(2, 'Name must be at least 2 characters'),
+  name:    z.string().trim().min(2, 'Name must be at least 2 characters'),
   address: z.string().optional(),
 })
 
@@ -92,15 +94,32 @@ type BranchInput = z.infer<typeof branchSchema>
 // ── Server Functions ──────────────────────────────────────────────────────────
 
 const getPageData = createServerFn({ method: 'GET' })
-  .middleware([resourceMiddleware('branches')])
+  .middleware([authMiddleware])
   .handler(async ({ context }) => {
-    const branches = await db.branch.findMany({
-      orderBy: { createdAt: 'desc' },
-      include: { _count: { select: { userRoles: true } } },
-    })
+    const hasAccess =
+      context.isAdmin ||
+      context.permissions.some((p) => p.resource === 'branches' && p.actions.includes('view'))
+
+    if (!hasAccess) return { authorized: false as const }
+
+    const [branches, archived] = await Promise.all([
+      db.branch.findMany({
+        where: { deletedAt: null },
+        orderBy: { createdAt: 'desc' },
+        include: { _count: { select: { userRoles: true } } },
+      }),
+      context.isAdmin
+        ? db.branch.findMany({
+            where: { deletedAt: { not: null } },
+            orderBy: { deletedAt: 'desc' },
+          })
+        : Promise.resolve([]),
+    ])
 
     return {
+      authorized: true as const,
       branches,
+      archived,
       access: extractAccess(context),
     }
   })
@@ -112,16 +131,17 @@ const createBranch = createServerFn({ method: 'POST' })
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
     return parsed.data
   })
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     const existing = await db.branch.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' } },
+      where: { name: { equals: data.name, mode: 'insensitive' }, deletedAt: null },
     })
     if (existing) throw new Error('A branch with this name already exists.')
 
-    await db.branch.create({
+    const branch = await db.branch.create({
       data: { name: data.name, address: data.address ?? null },
     })
 
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'create', resource: 'branches', resourceId: branch.id, newValue: { name: data.name, address: data.address } }).catch(() => {})
     return { success: true }
   })
 
@@ -132,24 +152,26 @@ const updateBranch = createServerFn({ method: 'POST' })
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
     return { ...parsed.data, id: data.id }
   })
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     const existing = await db.branch.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, NOT: { id: data.id } },
+      where: { name: { equals: data.name, mode: 'insensitive' }, NOT: { id: data.id }, deletedAt: null },
     })
     if (existing) throw new Error('A branch with this name already exists.')
 
+    const old = await db.branch.findUnique({ where: { id: data.id } })
     await db.branch.update({
       where: { id: data.id },
       data: { name: data.name, address: data.address ?? null },
     })
 
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'branches', resourceId: data.id, oldValue: old ? { name: old.name, address: old.address } : undefined, newValue: { name: data.name, address: data.address } }).catch(() => {})
     return { success: true }
   })
 
-const deleteBranch = createServerFn({ method: 'POST' })
+const softDeleteBranch = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     const [userCount, transactionCount, batchCount] = await Promise.all([
       db.userRole.count({ where: { branchId: data.id } }),
       db.transaction.count({ where: { branchId: data.id } }),
@@ -157,13 +179,50 @@ const deleteBranch = createServerFn({ method: 'POST' })
     ])
 
     if (userCount > 0)
-      throw new Error(`Cannot delete — ${userCount} user(s) are assigned to this branch.`)
+      throw new Error(`Cannot archive — ${userCount} user(s) are assigned to this branch.`)
     if (transactionCount > 0)
-      throw new Error(`Cannot delete — ${transactionCount} transaction(s) reference this branch.`)
+      throw new Error(`Cannot archive — ${transactionCount} transaction(s) reference this branch.`)
     if (batchCount > 0)
-      throw new Error(`Cannot delete — ${batchCount} upload batch(es) reference this branch.`)
+      throw new Error(`Cannot archive — ${batchCount} upload batch(es) reference this branch.`)
 
+    const old = await db.branch.findUnique({ where: { id: data.id } })
+    await db.branch.update({
+      where: { id: data.id },
+      data: { deletedAt: new Date(), deletedBy: context.user.email },
+    })
+
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'branches', resourceId: data.id, oldValue: old ? { name: old.name } : undefined }).catch(() => {})
+    return { success: true }
+  })
+
+const restoreBranch = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .inputValidator((data: { id: string }) => data)
+  .handler(async ({ data, context }) => {
+    const branch = await db.branch.findUnique({ where: { id: data.id } })
+
+    // Check if name conflicts with an active branch
+    const conflict = await db.branch.findFirst({
+      where: { name: { equals: branch?.name, mode: 'insensitive' }, deletedAt: null },
+    })
+    if (conflict) throw new Error(`A branch named "${branch?.name}" already exists. Rename it before restoring.`)
+
+    await db.branch.update({
+      where: { id: data.id },
+      data: { deletedAt: null, deletedBy: null },
+    })
+
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'branches', resourceId: data.id, newValue: { restored: true } }).catch(() => {})
+    return { success: true }
+  })
+
+const permanentDeleteBranch = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .inputValidator((data: { id: string }) => data)
+  .handler(async ({ data, context }) => {
+    const old = await db.branch.findUnique({ where: { id: data.id } })
     await db.branch.delete({ where: { id: data.id } })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'branches', resourceId: data.id, oldValue: old ? { name: old.name, permanentDelete: true } : undefined }).catch(() => {})
     return { success: true }
   })
 
@@ -171,7 +230,6 @@ const deleteBranch = createServerFn({ method: 'POST' })
 
 export const Route = createFileRoute('/_layout/branches')({
   loader: () => getPageData(),
-  errorComponent: () => <Unauthorized />,
   component: BranchesPage,
 })
 
@@ -309,12 +367,16 @@ function EditBranchDialog({ branch, onSuccess }: { branch: BranchRow; onSuccess:
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 function BranchesPage() {
-  const { branches, access } = Route.useLoaderData()
-  const router = useRouter()
+  const loaderData = Route.useLoaderData()
+  const router     = useRouter()
 
   const [sorting, setSorting]                   = useState<SortingState>([])
   const [globalFilter, setGlobalFilter]         = useState('')
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+
+  if (!loaderData.authorized) return <Unauthorized />
+  const { branches, archived, access } = loaderData
+
   function refresh() { router.invalidate() }
 
   const data: BranchRow[] = useMemo(
@@ -327,6 +389,18 @@ function BranchesPage() {
         userCount: b._count.userRoles,
       })),
     [branches]
+  )
+
+  const archivedRecords: ArchivedRecord[] = useMemo(
+    () =>
+      archived.map((b) => ({
+        id:        b.id,
+        name:      b.name,
+        extra:     b.address ?? null,
+        deletedAt: b.deletedAt!,
+        deletedBy: b.deletedBy ?? null,
+      })),
+    [archived]
   )
 
   const columns: ColumnDef<BranchRow>[] = useMemo(
@@ -407,11 +481,11 @@ function BranchesPage() {
               <div className="flex items-center justify-end gap-1">
                 <EditBranchDialog branch={branch} onSuccess={refresh} />
                 <DeleteDialog
-                  title="Delete Branch"
-                  description={<>Are you sure you want to delete <strong>{branch.name}</strong>? This cannot be undone.</>}
+                  title="Archive Branch"
+                  description={<>Archive <strong>{branch.name}</strong>? It will be hidden from active lists but can be restored later.</>}
                   disabled={branch.userCount > 0}
-                  disabledReason={branch.userCount > 0 ? `This branch has ${branch.userCount} assigned user${branch.userCount !== 1 ? 's' : ''} and cannot be deleted.` : undefined}
-                  onConfirm={async () => { await deleteBranch({ data: { id: branch.id } }); refresh() }}
+                  disabledReason={branch.userCount > 0 ? `This branch has ${branch.userCount} assigned user${branch.userCount !== 1 ? 's' : ''} and cannot be archived.` : undefined}
+                  onConfirm={async () => { await softDeleteBranch({ data: { id: branch.id } }); refresh() }}
                 />
               </div>
             </RoleGate>
@@ -443,9 +517,18 @@ function BranchesPage() {
           <h1 className="text-3xl font-bold tracking-tight">Branches</h1>
           <p className="text-muted-foreground">Manage branch locations and assignments</p>
         </div>
-        <RoleGate {...access} requireAdmin>
-          <CreateBranchDialog onSuccess={refresh} />
-        </RoleGate>
+        <div className="flex items-center gap-2">
+          <RoleGate {...access} requireAdmin>
+            <ArchivedRecordsDrawer
+              title="Archived Branches"
+              records={archivedRecords}
+              onRestore={async (id) => { await restoreBranch({ data: { id } }); refresh() }}
+              onPermanentDelete={async (id) => { await permanentDeleteBranch({ data: { id } }); refresh() }}
+              onOpenChange={(open) => { if (!open) refresh() }}
+            />
+            <CreateBranchDialog onSuccess={refresh} />
+          </RoleGate>
+        </div>
       </div>
 
       <Card>
@@ -541,11 +624,11 @@ function BranchesPage() {
                         <div className="flex items-center gap-1 shrink-0">
                           <EditBranchDialog branch={branch} onSuccess={refresh} />
                           <DeleteDialog
-                            title="Delete Branch"
-                            description={<>Are you sure you want to delete <strong>{branch.name}</strong>? This cannot be undone.</>}
+                            title="Archive Branch"
+                            description={<>Archive <strong>{branch.name}</strong>? It can be restored later.</>}
                             disabled={branch.userCount > 0}
-                            disabledReason={branch.userCount > 0 ? `This branch has ${branch.userCount} assigned user${branch.userCount !== 1 ? 's' : ''} and cannot be deleted.` : undefined}
-                            onConfirm={async () => { await deleteBranch({ data: { id: branch.id } }); refresh() }}
+                            disabledReason={branch.userCount > 0 ? `Has ${branch.userCount} assigned user${branch.userCount !== 1 ? 's' : ''}.` : undefined}
+                            onConfirm={async () => { await softDeleteBranch({ data: { id: branch.id } }); refresh() }}
                           />
                         </div>
                       </RoleGate>

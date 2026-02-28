@@ -14,10 +14,12 @@ import {
 } from '@tanstack/react-table'
 import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
-import { resourceMiddleware } from '#/middleware/resource'
+import { authMiddleware } from '#/middleware/auth'
 import { extractAccess } from '#/lib/rbac'
+import { logAudit } from '#/lib/logger'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { DeleteDialog } from '@/components/shared/DeleteDialog'
+import { ArchivedRecordsDrawer, type ArchivedRecord } from '@/components/shared/ArchivedRecordsDrawer'
 import { getErrorMessage } from '@/lib/utils'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
@@ -92,7 +94,7 @@ type TxTypeRow = {
 // ── Validation ────────────────────────────────────────────────────────────────
 
 const txTypeSchema = z.object({
-  name:        z.string().min(2, 'Name must be at least 2 characters'),
+  name:        z.string().trim().min(2, 'Name must be at least 2 characters'),
   description: z.string().optional(),
   pairedWith:  z.string().nullable().optional(),
 })
@@ -102,13 +104,29 @@ type TxTypeInput = z.infer<typeof txTypeSchema>
 // ── Server Functions ──────────────────────────────────────────────────────────
 
 const getPageData = createServerFn({ method: 'GET' })
-  .middleware([resourceMiddleware('transactionTypes')])
+  .middleware([authMiddleware])
   .handler(async ({ context }) => {
-    const txTypes = await db.transactionType.findMany({
-      orderBy: { createdAt: 'desc' },
-      include: { _count: { select: { transactions: true } } },
-    })
-    return { txTypes, access: extractAccess(context) }
+    const hasAccess =
+      context.isAdmin ||
+      context.permissions.some((p) => p.resource === 'transactionTypes' && p.actions.includes('view'))
+
+    if (!hasAccess) return { authorized: false as const }
+
+    const [txTypes, archived] = await Promise.all([
+      db.transactionType.findMany({
+        where: { deletedAt: null },
+        orderBy: { createdAt: 'desc' },
+        include: { _count: { select: { transactions: true } } },
+      }),
+      context.isAdmin
+        ? db.transactionType.findMany({
+            where: { deletedAt: { not: null } },
+            orderBy: { deletedAt: 'desc' },
+          })
+        : Promise.resolve([]),
+    ])
+
+    return { authorized: true as const, txTypes, archived, access: extractAccess(context) }
   })
 
 const createTransactionType = createServerFn({ method: 'POST' })
@@ -118,24 +136,25 @@ const createTransactionType = createServerFn({ method: 'POST' })
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
     return parsed.data
   })
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     const existing = await db.transactionType.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' } },
+      where: { name: { equals: data.name, mode: 'insensitive' }, deletedAt: null },
     })
     if (existing) throw new Error('A transaction type with this name already exists.')
     if (data.pairedWith) {
       const paired = await db.transactionType.findFirst({
-        where: { name: { equals: data.pairedWith, mode: 'insensitive' } },
+        where: { name: { equals: data.pairedWith, mode: 'insensitive' }, deletedAt: null },
       })
       if (!paired) throw new Error(`Paired type "${data.pairedWith}" does not exist.`)
     }
-    await db.transactionType.create({
+    const tt = await db.transactionType.create({
       data: {
         name:        data.name,
         description: data.description ?? null,
         pairedWith:  data.pairedWith ?? null,
       },
     })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'create', resource: 'transactionTypes', resourceId: tt.id, newValue: { name: data.name, pairedWith: data.pairedWith } }).catch(() => {})
     return { success: true }
   })
 
@@ -146,17 +165,18 @@ const updateTransactionType = createServerFn({ method: 'POST' })
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
     return { ...parsed.data, id: data.id, isActive: data.isActive }
   })
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     const existing = await db.transactionType.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, NOT: { id: data.id } },
+      where: { name: { equals: data.name, mode: 'insensitive' }, NOT: { id: data.id }, deletedAt: null },
     })
     if (existing) throw new Error('A transaction type with this name already exists.')
     if (data.pairedWith) {
       const paired = await db.transactionType.findFirst({
-        where: { name: { equals: data.pairedWith, mode: 'insensitive' }, NOT: { id: data.id } },
+        where: { name: { equals: data.pairedWith, mode: 'insensitive' }, NOT: { id: data.id }, deletedAt: null },
       })
       if (!paired) throw new Error(`Paired type "${data.pairedWith}" does not exist.`)
     }
+    const old = await db.transactionType.findUnique({ where: { id: data.id } })
     await db.transactionType.update({
       where: { id: data.id },
       data: {
@@ -166,22 +186,57 @@ const updateTransactionType = createServerFn({ method: 'POST' })
         isActive:    data.isActive,
       },
     })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'transactionTypes', resourceId: data.id, oldValue: old ? { name: old.name, isActive: old.isActive, pairedWith: old.pairedWith } : undefined, newValue: { name: data.name, isActive: data.isActive, pairedWith: data.pairedWith } }).catch(() => {})
     return { success: true }
   })
 
-const deleteTransactionType = createServerFn({ method: 'POST' })
+const softDeleteTransactionType = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     const [transactionCount, batchCount] = await Promise.all([
       db.transaction.count({ where: { transactionTypeId: data.id } }),
       db.uploadBatch.count({ where: { transactionTypeId: data.id } }),
     ])
     if (transactionCount > 0)
-      throw new Error(`Cannot delete — ${transactionCount} transaction(s) use this type.`)
+      throw new Error(`Cannot archive — ${transactionCount} transaction(s) use this type.`)
     if (batchCount > 0)
-      throw new Error(`Cannot delete — ${batchCount} upload batch(es) use this type.`)
+      throw new Error(`Cannot archive — ${batchCount} upload batch(es) use this type.`)
+
+    const old = await db.transactionType.findUnique({ where: { id: data.id } })
+    await db.transactionType.update({
+      where: { id: data.id },
+      data: { deletedAt: new Date(), deletedBy: context.user.email },
+    })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'transactionTypes', resourceId: data.id, oldValue: old ? { name: old.name } : undefined }).catch(() => {})
+    return { success: true }
+  })
+
+const restoreTransactionType = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .inputValidator((data: { id: string }) => data)
+  .handler(async ({ data, context }) => {
+    const tt = await db.transactionType.findUnique({ where: { id: data.id } })
+    const conflict = await db.transactionType.findFirst({
+      where: { name: { equals: tt?.name, mode: 'insensitive' }, deletedAt: null },
+    })
+    if (conflict) throw new Error(`A transaction type named "${tt?.name}" already exists. Rename it before restoring.`)
+
+    await db.transactionType.update({
+      where: { id: data.id },
+      data: { deletedAt: null, deletedBy: null },
+    })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'transactionTypes', resourceId: data.id, newValue: { restored: true } }).catch(() => {})
+    return { success: true }
+  })
+
+const permanentDeleteTransactionType = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .inputValidator((data: { id: string }) => data)
+  .handler(async ({ data, context }) => {
+    const old = await db.transactionType.findUnique({ where: { id: data.id } })
     await db.transactionType.delete({ where: { id: data.id } })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'transactionTypes', resourceId: data.id, oldValue: old ? { name: old.name, permanentDelete: true } : undefined }).catch(() => {})
     return { success: true }
   })
 
@@ -189,7 +244,6 @@ const deleteTransactionType = createServerFn({ method: 'POST' })
 
 export const Route = createFileRoute('/_layout/transaction-types')({
   loader: () => getPageData(),
-  errorComponent: () => <Unauthorized />,
   component: TransactionTypesPage,
 })
 
@@ -307,7 +361,6 @@ function EditTxTypeDialog({
     isActive:    txType.isActive,
   })
 
-  // Exclude self from paired options
   const pairOptions = existingNames.filter((n) => n !== txType.name)
 
   async function handleSubmit() {
@@ -395,12 +448,16 @@ function EditTxTypeDialog({
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 function TransactionTypesPage() {
-  const { txTypes, access } = Route.useLoaderData()
-  const router = useRouter()
+  const loaderData = Route.useLoaderData()
+  const router     = useRouter()
 
   const [sorting, setSorting]                   = useState<SortingState>([])
   const [globalFilter, setGlobalFilter]         = useState('')
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+
+  if (!loaderData.authorized) return <Unauthorized />
+  const { txTypes, archived, access } = loaderData
+
   function refresh() { router.invalidate() }
 
   const data: TxTypeRow[] = useMemo(
@@ -418,6 +475,18 @@ function TransactionTypesPage() {
   )
 
   const existingNames = useMemo(() => data.map((d) => d.name), [data])
+
+  const archivedRecords: ArchivedRecord[] = useMemo(
+    () =>
+      archived.map((t) => ({
+        id:        t.id,
+        name:      t.name,
+        extra:     t.description ?? null,
+        deletedAt: t.deletedAt!,
+        deletedBy: t.deletedBy ?? null,
+      })),
+    [archived]
+  )
 
   const columns: ColumnDef<TxTypeRow>[] = useMemo(
     () => [
@@ -512,11 +581,11 @@ function TransactionTypesPage() {
               <div className="flex items-center justify-end gap-1">
                 <EditTxTypeDialog txType={txType} existingNames={existingNames} onSuccess={refresh} />
                 <DeleteDialog
-                  title="Delete Transaction Type"
-                  description={<>Are you sure you want to delete <strong>{txType.name}</strong>? This cannot be undone.</>}
+                  title="Archive Transaction Type"
+                  description={<>Archive <strong>{txType.name}</strong>? It will be hidden from active lists but can be restored later.</>}
                   disabled={txType.transactionCount > 0}
-                  disabledReason={txType.transactionCount > 0 ? `This type has ${txType.transactionCount} transaction(s) and cannot be deleted.` : undefined}
-                  onConfirm={async () => { await deleteTransactionType({ data: { id: txType.id } }); refresh() }}
+                  disabledReason={txType.transactionCount > 0 ? `This type has ${txType.transactionCount} transaction(s) and cannot be archived.` : undefined}
+                  onConfirm={async () => { await softDeleteTransactionType({ data: { id: txType.id } }); refresh() }}
                 />
               </div>
             </RoleGate>
@@ -548,9 +617,18 @@ function TransactionTypesPage() {
           <h1 className="text-3xl font-bold tracking-tight">Transaction Types</h1>
           <p className="text-muted-foreground">Manage transaction type definitions</p>
         </div>
-        <RoleGate {...access} requireAdmin>
-          <CreateTxTypeDialog existingNames={existingNames} onSuccess={refresh} />
-        </RoleGate>
+        <div className="flex items-center gap-2">
+          <RoleGate {...access} requireAdmin>
+            <ArchivedRecordsDrawer
+              title="Archived Transaction Types"
+              records={archivedRecords}
+              onRestore={async (id) => { await restoreTransactionType({ data: { id } }); refresh() }}
+              onPermanentDelete={async (id) => { await permanentDeleteTransactionType({ data: { id } }); refresh() }}
+              onOpenChange={(open) => { if (!open) refresh() }}
+            />
+            <CreateTxTypeDialog existingNames={existingNames} onSuccess={refresh} />
+          </RoleGate>
+        </div>
       </div>
 
       <Card>
@@ -631,41 +709,46 @@ function TransactionTypesPage() {
           </div>
 
           {/* Card list — mobile */}
-          <div className="md:hidden space-y-2">
+          <div className="flex flex-col gap-3 md:hidden">
             {table.getRowModel().rows.length ? (
               table.getRowModel().rows.map((row) => {
                 const t = row.original
                 return (
-                  <Card key={t.id}>
-                    <CardContent className="p-4 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <ArrowLeftRight className="w-4 h-4 text-muted-foreground" />
-                          <span className="font-medium">{t.name}</span>
+                  <div key={t.id} className="rounded-lg border bg-card p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <ArrowLeftRight className="w-4 h-4 text-muted-foreground shrink-0" />
+                        <span className="font-medium truncate">{t.name}</span>
+                      </div>
+                      <RoleGate {...access} requireAdmin>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <EditTxTypeDialog txType={t} existingNames={existingNames} onSuccess={refresh} />
+                          <DeleteDialog
+                            title="Archive Transaction Type"
+                            description={<>Archive <strong>{t.name}</strong>? It can be restored later.</>}
+                            disabled={t.transactionCount > 0}
+                            disabledReason={t.transactionCount > 0 ? `Has ${t.transactionCount} transaction(s).` : undefined}
+                            onConfirm={async () => { await softDeleteTransactionType({ data: { id: t.id } }); refresh() }}
+                          />
                         </div>
-                        {t.isActive
-                          ? <Badge variant="default">Active</Badge>
-                          : <Badge variant="secondary">Inactive</Badge>}
-                      </div>
-                      {t.description && <p className="text-sm text-muted-foreground">{t.description}</p>}
-                      {t.pairedWith && <p className="text-xs">Paired: <Badge variant="secondary">{t.pairedWith}</Badge></p>}
-                      <div className="flex items-center justify-between">
-                        <Badge variant="outline">{t.transactionCount} transactions</Badge>
-                        <RoleGate {...access} requireAdmin>
-                          <div className="flex items-center gap-1">
-                            <EditTxTypeDialog txType={t} existingNames={existingNames} onSuccess={refresh} />
-                            <DeleteDialog
-                              title="Delete Transaction Type"
-                              description={<>Delete <strong>{t.name}</strong>?</>}
-                              disabled={t.transactionCount > 0}
-                              disabledReason={t.transactionCount > 0 ? `Has ${t.transactionCount} transaction(s).` : undefined}
-                              onConfirm={async () => { await deleteTransactionType({ data: { id: t.id } }); refresh() }}
-                            />
-                          </div>
-                        </RoleGate>
-                      </div>
-                    </CardContent>
-                  </Card>
+                      </RoleGate>
+                    </div>
+                    {t.description && <p className="text-sm text-muted-foreground">{t.description}</p>}
+                    {t.pairedWith && (
+                      <p className="text-xs text-muted-foreground">
+                        Paired: <Badge variant="secondary" className="ml-1">{t.pairedWith}</Badge>
+                      </p>
+                    )}
+                    <div className="flex items-center justify-between">
+                      {t.isActive
+                        ? <Badge variant="default">Active</Badge>
+                        : <Badge variant="secondary">Inactive</Badge>}
+                      <Badge variant="outline">{t.transactionCount} transactions</Badge>
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(t.createdAt).toLocaleDateString('en-IN')}
+                    </span>
+                  </div>
                 )
               })
             ) : (
@@ -679,18 +762,10 @@ function TransactionTypesPage() {
               Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
             </p>
             <div className="flex items-center gap-1">
-              <Button
-                variant="outline" size="sm"
-                onClick={() => table.previousPage()}
-                disabled={!table.getCanPreviousPage()}
-              >
+              <Button variant="outline" size="sm" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
                 <ChevronLeft className="w-4 h-4" />
               </Button>
-              <Button
-                variant="outline" size="sm"
-                onClick={() => table.nextPage()}
-                disabled={!table.getCanNextPage()}
-              >
+              <Button variant="outline" size="sm" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
                 <ChevronRight className="w-4 h-4" />
               </Button>
             </div>

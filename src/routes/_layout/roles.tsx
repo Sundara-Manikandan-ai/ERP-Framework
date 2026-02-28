@@ -13,10 +13,12 @@ import {
 } from '@tanstack/react-table'
 import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
-import { resourceMiddleware } from '#/middleware/resource'
+import { authMiddleware } from '#/middleware/auth'
 import { extractAccess } from '#/lib/rbac'
+import { logAudit } from '#/lib/logger'
 import { DeleteDialog } from '@/components/shared/DeleteDialog'
 import { RoleGate } from '@/components/shared/RoleGate'
+import { ArchivedRecordsDrawer, type ArchivedRecord } from '@/components/shared/ArchivedRecordsDrawer'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -58,7 +60,6 @@ import { Separator } from '@/components/ui/separator'
 import {
   Loader2,
   PlusCircle,
-  Trash2,
   Pencil,
   ArrowUpDown,
   ArrowUp,
@@ -71,14 +72,7 @@ import {
 } from 'lucide-react'
 import { z } from 'zod'
 import { cn, getErrorMessage } from '@/lib/utils'
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const ALL_RESOURCES = ['dashboard', 'profile', 'settings', 'users', 'branches', 'roles', 'pages', 'products', 'upload'] as const
-const ALL_ACTIONS   = ['view', 'create', 'edit', 'delete'] as const
-
-type Resource = typeof ALL_RESOURCES[number]
-type Action   = typeof ALL_ACTIONS[number]
+import { ALL_RESOURCES, ALL_ACTIONS, type Resource, type Action } from '#/lib/constants'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -100,21 +94,36 @@ type RoleRow = {
 // ── Validation ────────────────────────────────────────────────────────────────
 
 const roleSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters'),
+  name: z.string().trim().min(2, 'Name must be at least 2 characters'),
 })
 
 // ── Server Functions ──────────────────────────────────────────────────────────
 
 const getPageData = createServerFn({ method: 'GET' })
-  .middleware([resourceMiddleware('roles')])
+  .middleware([authMiddleware])
   .handler(async ({ context }) => {
-    const roles = await db.role.findMany({
-      orderBy: { name: 'asc' },
-      include: {
-        pagePermissions: true,
-        _count: { select: { userRoles: true } },
-      },
-    })
+    const hasAccess =
+      context.isAdmin ||
+      context.permissions.some((p) => p.resource === 'roles' && p.actions.includes('view'))
+
+    if (!hasAccess) return { authorized: false as const }
+
+    const [roles, archived] = await Promise.all([
+      db.role.findMany({
+        where: { deletedAt: null },
+        orderBy: { name: 'asc' },
+        include: {
+          pagePermissions: true,
+          _count: { select: { userRoles: true } },
+        },
+      }),
+      context.isAdmin
+        ? db.role.findMany({
+            where: { deletedAt: { not: null } },
+            orderBy: { deletedAt: 'desc' },
+          })
+        : Promise.resolve([]),
+    ])
 
     let users: { id: string; name: string; email: string }[] = []
     let branches: { id: string; name: string }[] = []
@@ -122,12 +131,14 @@ const getPageData = createServerFn({ method: 'GET' })
     if (context.isAdmin) {
       ;[users, branches] = await Promise.all([
         db.user.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, email: true } }),
-        db.branch.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
+        db.branch.findMany({ where: { deletedAt: null }, orderBy: { name: 'asc' }, select: { id: true, name: true } }),
       ])
     }
 
     return {
+      authorized: true as const,
       roles,
+      archived,
       users,
       branches,
       access: extractAccess(context),
@@ -145,10 +156,9 @@ const createRole = createServerFn({ method: 'POST' })
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
     return { ...parsed.data, description: data.description, pagePermissions: data.pagePermissions }
   })
-  .handler(async ({ data }) => {
-
+  .handler(async ({ data, context }) => {
     const existing = await db.role.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' } },
+      where: { name: { equals: data.name, mode: 'insensitive' }, deletedAt: null },
     })
     if (existing) throw new Error('A role with this name already exists.')
 
@@ -160,7 +170,6 @@ const createRole = createServerFn({ method: 'POST' })
           description: data.description || null,
         },
       })
-
       if (data.pagePermissions.length > 0) {
         await tx.pagePermission.createMany({
           data: data.pagePermissions.map((pp) => ({
@@ -172,6 +181,7 @@ const createRole = createServerFn({ method: 'POST' })
       }
     })
 
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'create', resource: 'roles', newValue: { name: data.name } }).catch(() => {})
     return { success: true }
   })
 
@@ -187,21 +197,20 @@ const updateRole = createServerFn({ method: 'POST' })
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
     return { ...parsed.data, id: data.id, description: data.description, pagePermissions: data.pagePermissions }
   })
-  .handler(async ({ data }) => {
-
+  .handler(async ({ data, context }) => {
     const existing = await db.role.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, NOT: { id: data.id } },
+      where: { name: { equals: data.name, mode: 'insensitive' }, NOT: { id: data.id }, deletedAt: null },
     })
     if (existing) throw new Error('A role with this name already exists.')
+
+    const old = await db.role.findUnique({ where: { id: data.id } })
 
     await db.$transaction(async (tx) => {
       await tx.role.update({
         where: { id: data.id },
         data: { name: data.name, description: data.description || null },
       })
-
       await tx.pagePermission.deleteMany({ where: { roleId: data.id } })
-
       if (data.pagePermissions.length > 0) {
         await tx.pagePermission.createMany({
           data: data.pagePermissions.map((pp) => ({
@@ -213,18 +222,58 @@ const updateRole = createServerFn({ method: 'POST' })
       }
     })
 
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'roles', resourceId: data.id, oldValue: old ? { name: old.name } : undefined, newValue: { name: data.name } }).catch(() => {})
     return { success: true }
   })
 
-const deleteRole = createServerFn({ method: 'POST' })
+const softDeleteRole = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
+    const role = await db.role.findUnique({ where: { id: data.id } })
+    if (!role) throw new Error('Role not found.')
+    if (role.type !== 'CUSTOM')
+      throw new Error(`System roles cannot be archived.`)
+
     const userCount = await db.userRole.count({ where: { roleId: data.id } })
     if (userCount > 0)
-      throw new Error(`Cannot delete — ${userCount} user(s) are assigned to this role.`)
+      throw new Error(`Cannot archive — ${userCount} user(s) are assigned to this role.`)
 
+    await db.role.update({
+      where: { id: data.id },
+      data: { deletedAt: new Date(), deletedBy: context.user.email },
+    })
+
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'roles', resourceId: data.id, oldValue: { name: role.name } }).catch(() => {})
+    return { success: true }
+  })
+
+const restoreRole = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .inputValidator((data: { id: string }) => data)
+  .handler(async ({ data, context }) => {
+    const role = await db.role.findUnique({ where: { id: data.id } })
+    const conflict = await db.role.findFirst({
+      where: { name: { equals: role?.name, mode: 'insensitive' }, deletedAt: null },
+    })
+    if (conflict) throw new Error(`A role named "${role?.name}" already exists. Rename it before restoring.`)
+
+    await db.role.update({
+      where: { id: data.id },
+      data: { deletedAt: null, deletedBy: null },
+    })
+
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'roles', resourceId: data.id, newValue: { restored: true } }).catch(() => {})
+    return { success: true }
+  })
+
+const permanentDeleteRole = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .inputValidator((data: { id: string }) => data)
+  .handler(async ({ data, context }) => {
+    const old = await db.role.findUnique({ where: { id: data.id } })
     await db.role.delete({ where: { id: data.id } })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'roles', resourceId: data.id, oldValue: old ? { name: old.name, permanentDelete: true } : undefined }).catch(() => {})
     return { success: true }
   })
 
@@ -309,7 +358,6 @@ function PermissionEditor({
             {a.slice(0, 1).toUpperCase()}
           </span>
         ))}
-        {/* all column */}
         <span className="text-xs font-semibold text-muted-foreground text-center">All</span>
       </div>
 
@@ -329,10 +377,7 @@ function PermissionEditor({
               isActive && 'bg-primary/5'
             )}
           >
-            {/* Resource name */}
             <span className="text-sm font-medium capitalize truncate">{resource}</span>
-
-            {/* Per-action checkboxes */}
             {ALL_ACTIONS.map((action) => (
               <div key={action} className="flex items-center justify-center">
                 <Checkbox
@@ -342,8 +387,6 @@ function PermissionEditor({
                 />
               </div>
             ))}
-
-            {/* Select-all checkbox */}
             <div className="flex items-center justify-center">
               <Checkbox
                 id={`res-${resource}`}
@@ -358,6 +401,7 @@ function PermissionEditor({
     </div>
   )
 }
+
 // ── Create Role Dialog ────────────────────────────────────────────────────────
 
 function CreateRoleDialog({ onSuccess }: { onSuccess: () => void }) {
@@ -532,12 +576,12 @@ function AssignRoleDialog({
   branches: { id: string; name: string }[]
   onSuccess: () => void
 }) {
-  const [open, setOpen]         = useState(false)
+  const [open, setOpen]           = useState(false)
   const [isPending, setIsPending] = useState(false)
-  const [error, setError]       = useState<string | null>(null)
-  const [userId, setUserId]     = useState('')
-  const [roleId, setRoleId]     = useState('')
-  const [branchId, setBranchId] = useState('none')
+  const [error, setError]         = useState<string | null>(null)
+  const [userId, setUserId]       = useState('')
+  const [roleId, setRoleId]       = useState('')
+  const [branchId, setBranchId]   = useState('none')
 
   async function handleSubmit() {
     if (!userId || !roleId) { setError('Please select a user and a role.'); return }
@@ -628,11 +672,14 @@ function AssignRoleDialog({
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 function RolesPage() {
-  const { roles, users, branches, access } = Route.useLoaderData()
-  const router = useRouter()
+  const loaderData = Route.useLoaderData()
+  const router     = useRouter()
 
   const [sorting, setSorting]           = useState<SortingState>([])
   const [globalFilter, setGlobalFilter] = useState('')
+
+  if (!loaderData.authorized) return <Unauthorized />
+  const { roles, archived, users, branches, access } = loaderData
 
   function refresh() { router.invalidate() }
 
@@ -648,6 +695,18 @@ function RolesPage() {
         createdAt:       r.createdAt,
       })),
     [roles]
+  )
+
+  const archivedRecords: ArchivedRecord[] = useMemo(
+    () =>
+      archived.map((r) => ({
+        id:        r.id,
+        name:      r.name,
+        extra:     r.description ?? null,
+        deletedAt: r.deletedAt!,
+        deletedBy: r.deletedBy ?? null,
+      })),
+    [archived]
   )
 
   const columns: ColumnDef<RoleRow>[] = useMemo(
@@ -733,16 +792,23 @@ function RolesPage() {
         enableHiding: false,
         cell: ({ row }) => {
           const role = row.original
+          const isSystem = role.type !== 'CUSTOM'
           return (
             <RoleGate {...access} requireAdmin>
               <div className="flex items-center justify-end gap-1">
                 <EditRoleDialog role={role} onSuccess={refresh} />
                 <DeleteDialog
-                  title="Delete Role"
-                  description={<>Are you sure you want to delete <strong>{role.name}</strong>? This cannot be undone.</>}
-                  disabled={role.userCount > 0}
-                  disabledReason={role.userCount > 0 ? `This role has ${role.userCount} assigned user${role.userCount !== 1 ? 's' : ''} and cannot be deleted.` : undefined}
-                  onConfirm={async () => { await deleteRole({ data: { id: role.id } }); refresh() }}
+                  title="Archive Role"
+                  description={<>Archive <strong>{role.name}</strong>? It will be hidden from active lists but can be restored later.</>}
+                  disabled={role.userCount > 0 || isSystem}
+                  disabledReason={
+                    isSystem
+                      ? 'System roles cannot be archived.'
+                      : role.userCount > 0
+                      ? `This role has ${role.userCount} assigned user${role.userCount !== 1 ? 's' : ''} and cannot be archived.`
+                      : undefined
+                  }
+                  onConfirm={async () => { await softDeleteRole({ data: { id: role.id } }); refresh() }}
                 />
               </div>
             </RoleGate>
@@ -768,7 +834,6 @@ function RolesPage() {
 
   return (
     <div className="space-y-2">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Roles</h1>
@@ -776,13 +841,19 @@ function RolesPage() {
         </div>
         <RoleGate {...access} requireAdmin>
           <div className="flex items-center gap-2">
+            <ArchivedRecordsDrawer
+              title="Archived Roles"
+              records={archivedRecords}
+              onRestore={async (id) => { await restoreRole({ data: { id } }); refresh() }}
+              onPermanentDelete={async (id) => { await permanentDeleteRole({ data: { id } }); refresh() }}
+              onOpenChange={(open) => { if (!open) refresh() }}
+            />
             <AssignRoleDialog roles={data} users={users} branches={branches} onSuccess={refresh} />
             <CreateRoleDialog onSuccess={refresh} />
           </div>
         </RoleGate>
       </div>
 
-      {/* Table Card */}
       <Card>
         <CardHeader>
           <CardTitle>All Roles</CardTitle>
@@ -842,9 +913,9 @@ function RolesPage() {
             {table.getRowModel().rows.length ? (
               table.getRowModel().rows.map((row) => {
                 const role = row.original
+                const isSystem = role.type !== 'CUSTOM'
                 return (
                   <div key={role.id} className="rounded-lg border bg-card p-3 space-y-2">
-                    {/* Row 1 — name + actions */}
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <Shield className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -859,17 +930,21 @@ function RolesPage() {
                         <div className="flex items-center gap-1 shrink-0">
                           <EditRoleDialog role={role} onSuccess={refresh} />
                           <DeleteDialog
-                            title="Delete Role"
-                            description={<>Are you sure you want to delete <strong>{role.name}</strong>? This cannot be undone.</>}
-                            disabled={role.userCount > 0}
-                            disabledReason={role.userCount > 0 ? `This role has ${role.userCount} assigned user${role.userCount !== 1 ? 's' : ''} and cannot be deleted.` : undefined}
-                            onConfirm={async () => { await deleteRole({ data: { id: role.id } }); refresh() }}
+                            title="Archive Role"
+                            description={<>Archive <strong>{role.name}</strong>? It can be restored later.</>}
+                            disabled={role.userCount > 0 || isSystem}
+                            disabledReason={
+                              isSystem
+                                ? 'System roles cannot be archived.'
+                                : role.userCount > 0
+                                ? `Has ${role.userCount} assigned user${role.userCount !== 1 ? 's' : ''}.`
+                                : undefined
+                            }
+                            onConfirm={async () => { await softDeleteRole({ data: { id: role.id } }); refresh() }}
                           />
                         </div>
                       </RoleGate>
                     </div>
-
-                    {/* Row 2 — type + user count */}
                     <div className="flex items-center gap-2">
                       <Badge variant="outline" className="text-xs capitalize shrink-0">
                         {role.type.toLowerCase().replace('_', ' ')}
@@ -879,8 +954,6 @@ function RolesPage() {
                         {role.userCount} user{role.userCount !== 1 ? 's' : ''}
                       </Badge>
                     </div>
-
-                    {/* Row 3 — page permissions */}
                     {role.pagePermissions.length > 0 && (
                       <div className="flex flex-wrap gap-1">
                         {role.pagePermissions.map((pp) => (
@@ -921,6 +994,5 @@ function RolesPage() {
 
 export const Route = createFileRoute('/_layout/roles')({
   loader: () => getPageData(),
-  errorComponent: () => <Unauthorized />,
   component: RolesPage,
 })

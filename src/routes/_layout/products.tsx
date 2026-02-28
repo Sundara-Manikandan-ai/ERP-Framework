@@ -3,7 +3,7 @@ import { createServerFn } from '@tanstack/react-start'
 import { useState, useMemo } from 'react'
 import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
-import { resourceMiddleware } from '#/middleware/resource'
+import { authMiddleware } from '#/middleware/auth'
 import { extractAccess } from '#/lib/rbac'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { DeleteDialog } from '@/components/shared/DeleteDialog'
@@ -90,16 +90,16 @@ type ProductRow = {
 // ── Schemas ────────────────────────────────────────────────────────────────────
 
 const categorySchema = z.object({
-  name: z.string().min(1, 'Name is required'),
+  name: z.string().trim().min(1, 'Name is required'),
 })
 
 const subcategorySchema = z.object({
-  name:       z.string().min(1, 'Name is required'),
+  name:       z.string().trim().min(1, 'Name is required'),
   categoryId: z.string().min(1, 'Category is required'),
 })
 
 const productSchema = z.object({
-  name:          z.string().min(1, 'Name is required'),
+  name:          z.string().trim().min(1, 'Name is required'),
   subcategoryId: z.string().min(1, 'Subcategory is required'),
   unit:          z.string().min(1, 'Unit is required'),
 })
@@ -107,8 +107,14 @@ const productSchema = z.object({
 // ── Server Functions ───────────────────────────────────────────────────────────
 
 const getPageData = createServerFn({ method: 'GET' })
-  .middleware([resourceMiddleware('products')])
+  .middleware([authMiddleware])
   .handler(async ({ context }) => {
+    const hasAccess =
+      context.isAdmin ||
+      context.permissions.some((p) => p.resource === 'products' && p.actions.includes('view'))
+
+    if (!hasAccess) return { authorized: false as const }
+
     const [categories, subcategories, products] = await Promise.all([
       db.productCategory.findMany({
         orderBy: { name: 'asc' },
@@ -134,6 +140,7 @@ const getPageData = createServerFn({ method: 'GET' })
     ])
 
     return {
+      authorized: true as const,
       access: extractAccess(context),
       categories: categories.map((c) => ({
         id:               c.id,
@@ -309,7 +316,6 @@ const deleteProduct = createServerFn({ method: 'POST' })
 
 export const Route = createFileRoute('/_layout/products')({
   loader: () => getPageData(),
-  errorComponent: () => <Unauthorized />,
   component: ProductsPage,
 })
 
@@ -682,8 +688,10 @@ function ProductDialog({
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
 function ProductsPage() {
+  const loaderData = Route.useLoaderData()
+  if (!loaderData.authorized) return <Unauthorized />
   const router  = useRouter()
-  const { access, categories, subcategories, products } = Route.useLoaderData()
+  const { access, categories, subcategories, products } = loaderData
   const refresh = () => router.invalidate()
 
   const [tab, setTab] = useState<'categories' | 'subcategories' | 'products'>('categories')

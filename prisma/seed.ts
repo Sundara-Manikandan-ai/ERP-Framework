@@ -1,15 +1,13 @@
 import 'dotenv/config'
 import type { Branch, Role } from '@prisma/client'
 import { db } from '../src/lib/db.js'
+import { ALL_RESOURCES, type Resource } from '../src/lib/constants.js'
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
 if (!ADMIN_PASSWORD) {
   console.error('ERROR: ADMIN_PASSWORD environment variable is required for seeding.')
   process.exit(1)
 }
-
-const ALL_RESOURCES = ['dashboard', 'profile', 'settings', 'users', 'branches', 'roles', 'pages', 'upload', 'products', 'factories', 'transactionTypes', 'reports'] as const
-type Resource = typeof ALL_RESOURCES[number]
 
 function viewOnly(...resources: Resource[]) {
   return resources.map((resource) => ({ resource, actions: ['view'] as string[] }))
@@ -210,6 +208,8 @@ async function main() {
     { resource: 'transactionTypes', label: 'Transaction Types', path: '/transaction-types',  icon: 'ArrowLeftRight',  navGroupId: dataGroup.id,    order: 2 },
     { resource: 'products',         label: 'Products',          path: '/products',           icon: 'Package',         navGroupId: dataGroup.id,    order: 3 },
     { resource: 'reports',          label: 'Reports',           path: '/reports',            icon: 'BarChart2',       navGroupId: reportsGroup.id, order: 1 },
+    { resource: 'auditLogs',        label: 'Audit Logs',        path: '/audit-logs',         icon: 'ClipboardList',   navGroupId: adminGroup.id,   order: 6 },
+    { resource: 'errorLogs',        label: 'Error Logs',        path: '/error-logs',         icon: 'AlertCircle',     navGroupId: adminGroup.id,   order: 7 },
   ]
 
   for (const page of pageDefs) {

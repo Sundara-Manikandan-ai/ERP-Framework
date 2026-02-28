@@ -14,8 +14,9 @@ import {
 } from '@tanstack/react-table'
 import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
-import { resourceMiddleware } from '#/middleware/resource'
+import { authMiddleware } from '#/middleware/auth'
 import { extractAccess } from '#/lib/rbac'
+import { logAudit } from '#/lib/logger'
 import { createUserSchema, type CreateUserInput } from '#/lib/user'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { DeleteDialog } from '@/components/shared/DeleteDialog'
@@ -87,8 +88,14 @@ type UserRow = {
 // ── Server Functions ──────────────────────────────────────────────────────────
 
 const getPageData = createServerFn({ method: 'GET' })
-  .middleware([resourceMiddleware('users')])
+  .middleware([authMiddleware])
   .handler(async ({ context }) => {
+    const hasAccess =
+      context.isAdmin ||
+      context.permissions.some((p) => p.resource === 'users' && p.actions.includes('view'))
+
+    if (!hasAccess) return { authorized: false as const }
+
     const [users, roles, branches] = await Promise.all([
       db.user.findMany({
         orderBy: { createdAt: 'desc' },
@@ -103,6 +110,7 @@ const getPageData = createServerFn({ method: 'GET' })
     ])
 
     return {
+      authorized: true as const,
       users,
       roles,
       branches,
@@ -117,7 +125,7 @@ const createUser = createServerFn({ method: 'POST' })
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
     return parsed.data
   })
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     const existing = await db.user.findUnique({ where: { email: data.email } })
     if (existing) throw new Error('A user with this email already exists.')
 
@@ -127,6 +135,7 @@ const createUser = createServerFn({ method: 'POST' })
     const { hashPassword } = await import('better-auth/crypto')
     const hashedPassword = await hashPassword(data.password)
 
+    let newUserId = ''
     await db.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
@@ -135,6 +144,7 @@ const createUser = createServerFn({ method: 'POST' })
           emailVerified: false,
         },
       })
+      newUserId = user.id
 
       await tx.account.create({
         data: {
@@ -157,6 +167,7 @@ const createUser = createServerFn({ method: 'POST' })
       })
     })
 
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'create', resource: 'users', resourceId: newUserId, newValue: { name: data.name, email: data.email, role: data.role } }).catch(() => {})
     return { success: true }
   })
 
@@ -167,14 +178,30 @@ const deleteUser = createServerFn({ method: 'POST' })
     if (data.userId === context.user.id) throw new Error('Cannot delete your own account.')
     const batchCount = await db.uploadBatch.count({ where: { uploadedBy: data.userId } })
     if (batchCount > 0) throw new Error(`Cannot delete — user has ${batchCount} upload batch(es) on record.`)
+
+    // Prevent deleting the last admin
+    const targetRoles = await db.userRole.findMany({
+      where: { userId: data.userId },
+      include: { role: true },
+    })
+    const isTargetAdmin = targetRoles.some((ur) => ur.role.type === 'ADMIN')
+    if (isTargetAdmin) {
+      const adminCount = await db.userRole.count({
+        where: { role: { type: 'ADMIN' } },
+      })
+      if (adminCount <= 1) throw new Error('Cannot delete the last admin user.')
+    }
+
+    const old = await db.user.findUnique({ where: { id: data.userId }, select: { name: true, email: true } })
     await db.user.delete({ where: { id: data.userId } })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'users', resourceId: data.userId, oldValue: old ?? undefined }).catch(() => {})
     return { success: true }
   })
 
 const updateUserRole = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { userId: string; roleName: string; branchId?: string }) => data)
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     const role = await db.role.findUnique({ where: { name: data.roleName } })
     if (!role) throw new Error('Role not found.')
 
@@ -189,6 +216,7 @@ const updateUserRole = createServerFn({ method: 'POST' })
       })
     })
 
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'users', resourceId: data.userId, newValue: { role: data.roleName, branchId: data.branchId } }).catch(() => {})
     return { success: true }
   })
 
@@ -196,7 +224,6 @@ const updateUserRole = createServerFn({ method: 'POST' })
 
 export const Route = createFileRoute('/_layout/users')({
   loader: () => getPageData(),
-  errorComponent: () => <Unauthorized />,
   component: UsersPage,
 })
 
@@ -414,12 +441,15 @@ function UpdateRoleDialog({
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 function UsersPage() {
-  const { users, roles, branches, access } = Route.useLoaderData()
+  const loaderData = Route.useLoaderData()
   const router = useRouter()
 
   const [sorting, setSorting]                   = useState<SortingState>([])
   const [globalFilter, setGlobalFilter]         = useState('')
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+
+  if (!loaderData.authorized) return <Unauthorized />
+  const { users, roles, branches, access } = loaderData
 
   function refresh() { router.invalidate() }
 

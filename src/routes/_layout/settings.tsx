@@ -3,8 +3,9 @@ import { createServerFn } from '@tanstack/react-start'
 import { useState } from 'react'
 import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
-import { resourceMiddleware } from '#/middleware/resource'
+import { authMiddleware } from '#/middleware/auth'
 import { extractAccess } from '#/lib/rbac'
+import { logAudit } from '#/lib/logger'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { getErrorMessage } from '@/lib/utils'
@@ -17,17 +18,35 @@ import { Loader2, Save } from 'lucide-react'
 // ── Server Functions ──────────────────────────────────────────────────────────
 
 const getPageData = createServerFn({ method: 'GET' })
-  .middleware([resourceMiddleware('settings')])
+  .middleware([authMiddleware])
   .handler(async ({ context }) => {
+    const hasAccess =
+      context.isAdmin ||
+      context.permissions.some((p) => p.resource === 'settings' && p.actions.includes('view'))
+
+    if (!hasAccess) return { authorized: false as const }
+
     const settings = await db.appSetting.findMany({ orderBy: { key: 'asc' } })
-    return { settings, access: extractAccess(context) }
+    return { authorized: true as const, settings, access: extractAccess(context) }
   })
+
+const SETTING_VALIDATORS: Record<string, (v: string) => string | null> = {
+  appName:  (v) => v.trim().length < 1 ? 'App name cannot be empty' : null,
+  timezone: (v) => v.trim().length < 1 ? 'Timezone cannot be empty' : null,
+}
 
 const updateSetting = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { key: string; value: string }) => data)
-  .handler(async ({ data }) => {
-    await db.appSetting.update({ where: { key: data.key }, data: { value: data.value } })
+  .handler(async ({ data, context }) => {
+    const validator = SETTING_VALIDATORS[data.key]
+    if (validator) {
+      const err = validator(data.value)
+      if (err) throw new Error(err)
+    }
+    const old = await db.appSetting.findUnique({ where: { key: data.key } })
+    await db.appSetting.update({ where: { key: data.key }, data: { value: data.value.trim() } })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'settings', resourceId: data.key, oldValue: old ? { value: old.value } : undefined, newValue: { value: data.value } }).catch(() => {})
     return { success: true }
   })
 
@@ -35,13 +54,13 @@ const updateSetting = createServerFn({ method: 'POST' })
 
 export const Route = createFileRoute('/_layout/settings')({
   loader: () => getPageData(),
-  errorComponent: () => <Unauthorized />,
   component: SettingsPage,
 })
 
 // ── Setting Row ───────────────────────────────────────────────────────────────
 
-type AccessType = Awaited<ReturnType<typeof getPageData>>['access']
+type PageDataAuthorized = Extract<Awaited<ReturnType<typeof getPageData>>, { authorized: true }>
+type AccessType = PageDataAuthorized['access']
 
 function SettingRow({
   settingKey,
@@ -120,7 +139,9 @@ function SettingRow({
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 function SettingsPage() {
-  const { settings, access } = Route.useLoaderData()
+  const loaderData = Route.useLoaderData()
+  if (!loaderData.authorized) return <Unauthorized />
+  const { settings, access } = loaderData
 
   return (
     <div className="space-y-2 max-w-3xl">
