@@ -20,9 +20,14 @@ model User {
   password                 String?
   createdAt                DateTime      @default(now())
   updatedAt                DateTime      @updatedAt
+  lastLoginAt              DateTime?
+  failedAttempts           Int       @default(0)
+  lockedUntil              DateTime?
   notifyLoginSelf          Boolean       @default(true)
   notifySystemAnnouncement Boolean       @default(true)
   notifyLoginAdmin         Boolean       @default(false)
+  deletedAt                DateTime?
+  deletedBy                String?
   sessions                 Session[]
   accounts                 Account[]
   userRoles                UserRole[]
@@ -43,8 +48,12 @@ model Role {
   description     String?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
+  deletedAt              DateTime?
+  deletedBy              String?
   userRoles       UserRole[]
   pagePermissions PagePermission[]
+
+  @@index([deletedAt])
 }
 
 model PagePermission {
@@ -145,9 +154,13 @@ model Branch {
   isActive      Boolean       @default(true)
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
+  deletedAt              DateTime?
+  deletedBy              String?
   userRoles     UserRole[]
   transactions  Transaction[]
   uploadBatches UploadBatch[]
+
+  @@index([deletedAt])
 }
 
 model Factory {
@@ -157,6 +170,8 @@ model Factory {
   isActive     Boolean       @default(true)
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+  deletedAt              DateTime?
+  deletedBy              String?
   transactions Transaction[]
   uploadBatches UploadBatch[]
 }
@@ -166,37 +181,31 @@ model Factory {
 // ─────────────────────────────────────────────────────────────
 
 model ProductCategory {
-  id            String               @id @default(cuid())
-  name          String               @unique
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
-  subcategories ProductSubcategory[]
-}
+  id        String            @id @default(cuid())
+  name      String
+  parentId  String?
+  parent    ProductCategory?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children  ProductCategory[] @relation("CategoryTree")
+  products  Product[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
 
-model ProductSubcategory {
-  id         String          @id @default(cuid())
-  name       String
-  categoryId String
-  createdAt  DateTime        @default(now())
-  updatedAt  DateTime        @updatedAt
-  category   ProductCategory @relation(fields: [categoryId], references: [id])
-  products   Product[]
-
-  @@unique([name, categoryId])
+  @@unique([name, parentId])
+  @@index([parentId])
 }
 
 model Product {
-  id              String             @id @default(cuid())
-  name            String
-  subcategoryId   String
-  unit            String             @default("pcs")
-  isActive        Boolean            @default(true)
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-  subcategory     ProductSubcategory @relation(fields: [subcategoryId], references: [id])
-  transactions    Transaction[]
+  id           String          @id @default(cuid())
+  name         String
+  categoryId   String
+  unit         String          @default("pcs")
+  isActive     Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  category     ProductCategory @relation(fields: [categoryId], references: [id])
+  transactions Transaction[]
 
-  @@unique([name, subcategoryId])
+  @@unique([name, categoryId])
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -211,6 +220,8 @@ model TransactionType {
   isActive      Boolean       @default(true)
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
+  deletedAt              DateTime?
+  deletedBy              String?
   transactions  Transaction[]
   uploadBatches UploadBatch[]
 }
@@ -278,4 +289,54 @@ enum UploadStatus {
   SUCCESS
   PARTIAL
   FAILED
+}
+
+// ─────────────────────────────────────────────────────────────
+// OBSERVABILITY
+// ─────────────────────────────────────────────────────────────
+
+model ErrorLog {
+  id        String   @id @default(cuid())
+  message   String
+  stack     String?
+  url       String?
+  userId    String?
+  userEmail String?
+  context   Json?
+  source    String   @default("server") // "server" | "client"
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  userEmail  String
+  action     String   // "create" | "update" | "delete"
+  resource   String   // e.g. "branches", "users"
+  resourceId String?
+  oldValue   Json?
+  newValue   Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([resource, action])
+}
+
+model LoginEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  userEmail String
+  ip        String?
+  userAgent String?
+  success   Boolean
+  reason    String?  // e.g. "invalid_password", "account_locked"
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
 }
