@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import type { Branch, Role } from '@prisma/client'
+import type { Branch, Role } from '../generated/prisma/client.js'
 import { db } from '../src/lib/db.js'
 import { ALL_RESOURCES, type Resource } from '../src/lib/constants.js'
 
