@@ -5,32 +5,22 @@ import {
   useReactTable,
   getCoreRowModel,
   getSortedRowModel,
+  getFilteredRowModel,
   getPaginationRowModel,
-  flexRender,
   type ColumnDef,
   type SortingState,
+  type VisibilityState,
 } from '@tanstack/react-table'
 import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
 import { authMiddleware } from '#/middleware/auth'
 import { Unauthorized } from '@/components/shared/Unauthorized'
+import { DataTable } from '@/components/shared/DataTable'
+import { TableToolbar } from '@/components/shared/TableToolbar'
+import { SortableHeader } from '@/components/shared/SortableHeader'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from '@/components/ui/card'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Card, CardContent } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -39,7 +29,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Loader2, Trash2, Eye, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import { Loader2, Trash2, Eye, RefreshCw, AlertTriangle } from 'lucide-react'
 import { getErrorMessage } from '@/lib/utils'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -145,8 +135,10 @@ function ErrorLogsPage() {
   const loaderData = Route.useLoaderData()
   const router = useRouter()
 
-  const [sorting, setSorting]       = useState<SortingState>([])
-  const [clearing, setClearing]     = useState(false)
+  const [sorting, setSorting] = useState<SortingState>([])
+  const [globalFilter, setGlobalFilter] = useState('')
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [clearing, setClearing] = useState(false)
   const [clearError, setClearError] = useState<string | null>(null)
 
   if (!loaderData.authorized) return <Unauthorized />
@@ -195,21 +187,21 @@ function ErrorLogsPage() {
     },
     {
       accessorKey: 'message',
-      header: 'Message',
+      header: ({ column }) => <SortableHeader column={column} label="Message" />,
       cell: ({ row }) => (
-        <span className="text-sm font-mono line-clamp-2 max-w-xs block">
+        <span className="font-mono line-clamp-2 max-w-xs block">
           {row.getValue('message') as string}
         </span>
       ),
     },
     {
       accessorKey: 'userEmail',
-      header: 'User',
+      header: ({ column }) => <SortableHeader column={column} label="User" />,
       cell: ({ row }) => {
         const email = row.getValue('userEmail') as string | null
         return email
-          ? <span className="text-sm">{email}</span>
-          : <span className="text-xs text-muted-foreground italic">anonymous</span>
+          ? <span>{email}</span>
+          : <span className="text-muted-foreground italic">anonymous</span>
       },
     },
     {
@@ -218,15 +210,15 @@ function ErrorLogsPage() {
       cell: ({ row }) => {
         const url = row.getValue('url') as string | null
         return url
-          ? <span className="text-xs text-muted-foreground truncate max-w-32 block">{url}</span>
-          : <span className="text-xs text-muted-foreground italic">—</span>
+          ? <span className="text-muted-foreground truncate max-w-32 block">{url}</span>
+          : <span className="text-muted-foreground italic">—</span>
       },
     },
     {
       accessorKey: 'createdAt',
-      header: 'Time',
+      header: ({ column }) => <SortableHeader column={column} label="Time" />,
       cell: ({ row }) => (
-        <span className="text-xs text-muted-foreground whitespace-nowrap">
+        <span className="text-muted-foreground whitespace-nowrap">
           {new Date(row.getValue('createdAt') as Date).toLocaleString('en-IN')}
         </span>
       ),
@@ -235,6 +227,7 @@ function ErrorLogsPage() {
       id: 'actions',
       header: () => <div className="text-right">Actions</div>,
       enableSorting: false,
+      enableHiding: false,
       cell: ({ row }) => {
         const log = row.original
         return (
@@ -259,10 +252,13 @@ function ErrorLogsPage() {
   const table = useReactTable({
     data,
     columns,
-    state: { sorting },
+    state: { sorting, globalFilter, columnVisibility },
     onSortingChange: setSorting,
+    onGlobalFilterChange: setGlobalFilter,
+    onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     initialState: { pagination: { pageSize: 20 } },
   })
@@ -292,56 +288,56 @@ function ErrorLogsPage() {
       )}
 
       <Card>
-        <CardHeader>
-          <CardTitle>Recent Errors</CardTitle>
-          <CardDescription>{data.length} entries (last 500)</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2 pt-0">
-          {data.length === 0 ? (
-            <p className="text-sm text-muted-foreground italic py-8 text-center">No errors logged. 🎉</p>
-          ) : (
-            <>
-              <div className="rounded-md border overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    {table.getHeaderGroups().map((hg) => (
-                      <TableRow key={hg.id}>
-                        {hg.headers.map((header) => (
-                          <TableHead key={header.id}>
-                            {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                          </TableHead>
-                        ))}
-                      </TableRow>
-                    ))}
-                  </TableHeader>
-                  <TableBody>
-                    {table.getRowModel().rows.map((row) => (
-                      <TableRow key={row.id}>
-                        {row.getVisibleCells().map((cell) => (
-                          <TableCell key={cell.id}>
-                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-              <div className="flex items-center justify-between pt-1">
-                <p className="text-sm text-muted-foreground">
-                  Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-                </p>
-                <div className="flex items-center gap-1">
-                  <Button variant="outline" size="sm" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
-                    <ChevronLeft className="w-4 h-4" />
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
+        <CardContent className="space-y-2 pt-4">
+          <TableToolbar
+            table={table}
+            globalFilter={globalFilter}
+            onGlobalFilterChange={setGlobalFilter}
+            searchPlaceholder="Search by message, user, source..."
+          />
+
+          <DataTable
+            table={table}
+            columns={columns}
+            emptyMessage="No errors logged."
+            mobileCard={(log) => (
+              <div className="rounded-lg border bg-card p-4 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <AlertTriangle className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <Badge variant={log.source === 'client' ? 'secondary' : 'default'}>
+                      {log.source}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <DetailDialog log={log} />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={async () => {
+                        await deleteErrorLog({ data: { id: log.id } })
+                        refresh()
+                      }}
+                    >
+                      <Trash2 className="w-4 h-4 text-destructive" />
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-sm font-mono line-clamp-2 break-all">{log.message}</p>
+                {log.userEmail && (
+                  <p className="text-xs text-muted-foreground">{log.userEmail}</p>
+                )}
+                <div className="flex items-center justify-between">
+                  {log.url ? (
+                    <span className="text-xs text-muted-foreground truncate max-w-[60%]">{log.url}</span>
+                  ) : <span />}
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(log.createdAt).toLocaleString('en-IN')}
+                  </span>
                 </div>
               </div>
-            </>
-          )}
+            )}
+          />
         </CardContent>
       </Card>
     </div>

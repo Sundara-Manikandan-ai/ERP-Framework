@@ -1,37 +1,25 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
-import { ExportButton } from '@/components/shared/ExportButton'
 import { createServerFn } from '@tanstack/react-start'
 import { useState, useMemo } from 'react'
 import {
   useReactTable,
   getCoreRowModel,
   getSortedRowModel,
+  getFilteredRowModel,
   getPaginationRowModel,
-  flexRender,
   type ColumnDef,
   type SortingState,
+  type VisibilityState,
 } from '@tanstack/react-table'
 import { db } from '#/lib/db'
 import { authMiddleware } from '#/middleware/auth'
 import { Unauthorized } from '@/components/shared/Unauthorized'
+import { DataTable } from '@/components/shared/DataTable'
+import { TableToolbar } from '@/components/shared/TableToolbar'
+import { SortableHeader } from '@/components/shared/SortableHeader'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from '@/components/ui/card'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Card, CardContent } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -39,7 +27,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { Eye, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import { Eye, RefreshCw, ClipboardList } from 'lucide-react'
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type AuditLogRow = {
@@ -142,8 +131,9 @@ function AuditLogsPage() {
   const loaderData = Route.useLoaderData()
   const router = useRouter()
 
-  const [sorting, setSorting]           = useState<SortingState>([])
+  const [sorting, setSorting] = useState<SortingState>([])
   const [globalFilter, setGlobalFilter] = useState('')
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
 
   if (!loaderData.authorized) return <Unauthorized />
   const { logs } = loaderData
@@ -163,15 +153,14 @@ function AuditLogsPage() {
     createdAt:  l.createdAt,
   })), [logs])
 
-  const filtered = useMemo(() => {
-    if (!globalFilter) return data
-    const q = globalFilter.toLowerCase()
-    return data.filter((r) =>
-      r.userEmail.toLowerCase().includes(q) ||
-      r.action.toLowerCase().includes(q) ||
-      r.resource.toLowerCase().includes(q)
-    )
-  }, [data, globalFilter])
+  const exportData = useMemo(() => data.map((r) => ({
+    User: r.userEmail,
+    Action: r.action,
+    Resource: r.resource,
+    'Resource ID': r.resourceId ?? '',
+    IP: r.ip ?? '',
+    Date: new Date(r.createdAt).toLocaleString('en-IN'),
+  })), [data])
 
   const columns: ColumnDef<AuditLogRow>[] = useMemo(() => [
     {
@@ -181,15 +170,15 @@ function AuditLogsPage() {
     },
     {
       accessorKey: 'resource',
-      header: 'Resource',
+      header: ({ column }) => <SortableHeader column={column} label="Resource" />,
       cell: ({ row }) => (
-        <span className="text-sm font-mono">{row.getValue('resource') as string}</span>
+        <span className="font-mono">{row.getValue('resource') as string}</span>
       ),
     },
     {
       accessorKey: 'userEmail',
-      header: 'User',
-      cell: ({ row }) => <span className="text-sm">{row.getValue('userEmail') as string}</span>,
+      header: ({ column }) => <SortableHeader column={column} label="User" />,
+      cell: ({ row }) => <span>{row.getValue('userEmail') as string}</span>,
     },
     {
       accessorKey: 'ip',
@@ -197,15 +186,15 @@ function AuditLogsPage() {
       cell: ({ row }) => {
         const ip = row.getValue('ip') as string | null
         return ip
-          ? <span className="text-xs text-muted-foreground font-mono">{ip}</span>
-          : <span className="text-xs text-muted-foreground italic">—</span>
+          ? <span className="text-muted-foreground font-mono">{ip}</span>
+          : <span className="text-muted-foreground italic">—</span>
       },
     },
     {
       accessorKey: 'createdAt',
-      header: 'Time',
+      header: ({ column }) => <SortableHeader column={column} label="Time" />,
       cell: ({ row }) => (
-        <span className="text-xs text-muted-foreground whitespace-nowrap">
+        <span className="text-muted-foreground whitespace-nowrap">
           {new Date(row.getValue('createdAt') as Date).toLocaleString('en-IN')}
         </span>
       ),
@@ -214,6 +203,7 @@ function AuditLogsPage() {
       id: 'actions',
       header: () => <div className="text-right">Details</div>,
       enableSorting: false,
+      enableHiding: false,
       cell: ({ row }) => (
         <div className="flex justify-end">
           <DiffDialog log={row.original} />
@@ -223,12 +213,15 @@ function AuditLogsPage() {
   ], [])
 
   const table = useReactTable({
-    data: filtered,
+    data,
     columns,
-    state: { sorting },
+    state: { sorting, globalFilter, columnVisibility },
     onSortingChange: setSorting,
+    onGlobalFilterChange: setGlobalFilter,
+    onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     initialState: { pagination: { pageSize: 25 } },
   })
@@ -246,85 +239,45 @@ function AuditLogsPage() {
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Activity History</CardTitle>
-          <CardDescription>{filtered.length} of {data.length} entries (last 1,000)</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2 pt-0">
-          <div className="flex items-center gap-3">
-            <Input
-              placeholder="Filter by user, action, or resource..."
-              value={globalFilter}
-              onChange={(e) => setGlobalFilter(e.target.value)}
-              className="max-w-sm"
-            />
-            <ExportButton
-              filename="audit-logs"
-              sheetName="Audit Logs"
-              data={filtered.map((r) => ({
-                User: r.userEmail,
-                Action: r.action,
-                Resource: r.resource,
-                'Resource ID': r.resourceId ?? '',
-                IP: r.ip ?? '',
-                Date: new Date(r.createdAt).toLocaleString('en-IN'),
-              }))}
-            />
-          </div>
+        <CardContent className="space-y-2 pt-4">
+          <TableToolbar
+            table={table}
+            globalFilter={globalFilter}
+            onGlobalFilterChange={setGlobalFilter}
+            searchPlaceholder="Filter by user, action, or resource..."
+            exportFilename="audit-logs"
+            exportSheetName="Audit Logs"
+            exportData={exportData}
+          />
 
-          {data.length === 0 ? (
-            <p className="text-sm text-muted-foreground italic py-8 text-center">No audit entries yet.</p>
-          ) : (
-            <>
-              <div className="rounded-md border overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    {table.getHeaderGroups().map((hg) => (
-                      <TableRow key={hg.id}>
-                        {hg.headers.map((header) => (
-                          <TableHead key={header.id}>
-                            {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                          </TableHead>
-                        ))}
-                      </TableRow>
-                    ))}
-                  </TableHeader>
-                  <TableBody>
-                    {table.getRowModel().rows.length ? (
-                      table.getRowModel().rows.map((row) => (
-                        <TableRow key={row.id}>
-                          {row.getVisibleCells().map((cell) => (
-                            <TableCell key={cell.id}>
-                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={columns.length} className="text-center py-8 text-muted-foreground">
-                          No matching entries.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-              <div className="flex items-center justify-between pt-1">
-                <p className="text-sm text-muted-foreground">
-                  Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-                </p>
-                <div className="flex items-center gap-1">
-                  <Button variant="outline" size="sm" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
-                    <ChevronLeft className="w-4 h-4" />
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
+          <DataTable
+            table={table}
+            columns={columns}
+            emptyMessage="No audit entries yet."
+            mobileCard={(log) => (
+              <div className="rounded-lg border bg-card p-4 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <ClipboardList className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <ActionBadge action={log.action} />
+                    <span className="font-mono text-sm truncate">{log.resource}</span>
+                  </div>
+                  <div className="shrink-0">
+                    <DiffDialog log={log} />
+                  </div>
                 </div>
+                <div className="space-y-1">
+                  <p className="text-sm">{log.userEmail}</p>
+                  {log.ip && (
+                    <p className="text-xs text-muted-foreground font-mono">{log.ip}</p>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground text-right">
+                  {new Date(log.createdAt).toLocaleString('en-IN')}
+                </p>
               </div>
-            </>
-          )}
+            )}
+          />
         </CardContent>
       </Card>
     </div>
