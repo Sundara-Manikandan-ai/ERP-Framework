@@ -7,7 +7,6 @@ import {
   getSortedRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
-  flexRender,
   type ColumnDef,
   type SortingState,
   type VisibilityState,
@@ -17,16 +16,21 @@ import { adminMiddleware } from '#/middleware/admin'
 import { authMiddleware } from '#/middleware/auth'
 import { extractAccess, invalidateAccessCache } from '#/lib/rbac'
 import { logAudit } from '#/lib/logger'
+import { restoreRecord, permanentDeleteRecord } from '#/lib/crud-helpers'
 import { createUserSchema, type CreateUserInput } from '#/lib/user'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { DeleteDialog } from '@/components/shared/DeleteDialog'
+import { ArchivedRecordsDrawer, type ArchivedRecord } from '@/components/shared/ArchivedRecordsDrawer'
+import { SortableHeader } from '@/components/shared/SortableHeader'
+import { DataTable } from '@/components/shared/DataTable'
+import { TableToolbar } from '@/components/shared/TableToolbar'
 import { getErrorMessage } from '@/lib/utils'
-import { ExportButton } from '@/components/shared/ExportButton'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Card,
   CardContent,
@@ -50,30 +54,9 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import {
   Loader2,
   UserPlus,
-  Trash2,
   UserCog,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
-  ChevronLeft,
-  ChevronRight,
-  SlidersHorizontal,
 } from 'lucide-react'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -97,8 +80,9 @@ const getPageData = createServerFn({ method: 'GET' })
 
     if (!hasAccess) return { authorized: false as const }
 
-    const [users, roles, branches] = await Promise.all([
+    const [users, roles, branches, archived] = await Promise.all([
       db.user.findMany({
+        where: { deletedAt: null },
         orderBy: { createdAt: 'desc' },
         include: {
           userRoles: {
@@ -106,8 +90,14 @@ const getPageData = createServerFn({ method: 'GET' })
           },
         },
       }),
-      db.role.findMany({ orderBy: { name: 'asc' } }),
-      db.branch.findMany({ orderBy: { name: 'asc' } }),
+      db.role.findMany({ where: { deletedAt: null }, orderBy: { name: 'asc' } }),
+      db.branch.findMany({ where: { deletedAt: null }, orderBy: { name: 'asc' } }),
+      context.isAdmin
+        ? db.user.findMany({
+            where: { deletedAt: { not: null } },
+            orderBy: { deletedAt: 'desc' },
+          })
+        : Promise.resolve([]),
     ])
 
     return {
@@ -115,6 +105,7 @@ const getPageData = createServerFn({ method: 'GET' })
       users,
       roles,
       branches,
+      archived,
       access: extractAccess(context),
     }
   })
@@ -128,7 +119,7 @@ const createUser = createServerFn({ method: 'POST' })
   })
   .handler(async ({ data, context }) => {
     const existing = await db.user.findUnique({ where: { email: data.email } })
-    if (existing) throw new Error('A user with this email already exists.')
+    if (existing) throw new Error('Unable to create user. The email may already be in use.')
 
     const role = await db.role.findUnique({ where: { name: data.role } })
     if (!role) throw new Error('Role not found.')
@@ -172,15 +163,15 @@ const createUser = createServerFn({ method: 'POST' })
     return { success: true }
   })
 
-const deleteUser = createServerFn({ method: 'POST' })
+const softDeleteUser = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { userId: string }) => data)
   .handler(async ({ data, context }) => {
-    if (data.userId === context.user.id) throw new Error('Cannot delete your own account.')
-    const batchCount = await db.uploadBatch.count({ where: { uploadedBy: data.userId } })
-    if (batchCount > 0) throw new Error(`Cannot delete — user has ${batchCount} upload batch(es) on record.`)
+    if (data.userId === context.user.id) throw new Error('Cannot archive your own account.')
 
-    // Prevent deleting the last admin
+    const batchCount = await db.uploadBatch.count({ where: { uploadedBy: data.userId } })
+    if (batchCount > 0) throw new Error(`Cannot archive — user has ${batchCount} upload batch(es) on record.`)
+
     const targetRoles = await db.userRole.findMany({
       where: { userId: data.userId },
       include: { role: true },
@@ -188,15 +179,35 @@ const deleteUser = createServerFn({ method: 'POST' })
     const isTargetAdmin = targetRoles.some((ur) => ur.role.type === 'ADMIN')
     if (isTargetAdmin) {
       const adminCount = await db.userRole.count({
-        where: { role: { type: 'ADMIN' } },
+        where: { role: { type: 'ADMIN' }, user: { deletedAt: null } },
       })
-      if (adminCount <= 1) throw new Error('Cannot delete the last admin user.')
+      if (adminCount <= 1) throw new Error('Cannot archive the last admin user.')
     }
 
     const old = await db.user.findUnique({ where: { id: data.userId }, select: { name: true, email: true } })
-    await db.user.delete({ where: { id: data.userId } })
+    await db.user.update({
+      where: { id: data.userId },
+      data: { deletedAt: new Date(), deletedBy: context.user.email },
+    })
     invalidateAccessCache(data.userId)
     logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'users', resourceId: data.userId, oldValue: old ?? undefined }).catch(() => {})
+    return { success: true }
+  })
+
+const restoreUserFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .inputValidator((data: { userId: string }) => data)
+  .handler(async ({ data, context }) => {
+    await restoreRecord(db.user, data.userId, { userId: context.user.id, userEmail: context.user.email }, 'users', { field: 'email' })
+    return { success: true }
+  })
+
+const permanentDeleteUserFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .inputValidator((data: { userId: string }) => data)
+  .handler(async ({ data, context }) => {
+    await permanentDeleteRecord(db.user, data.userId, { userId: context.user.id, userEmail: context.user.email }, 'users')
+    invalidateAccessCache(data.userId)
     return { success: true }
   })
 
@@ -452,7 +463,7 @@ function UsersPage() {
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
 
   if (!loaderData.authorized) return <Unauthorized />
-  const { users, roles, branches, access } = loaderData
+  const { users, roles, branches, archived, access } = loaderData
 
   function refresh() { router.invalidate() }
 
@@ -473,30 +484,28 @@ function UsersPage() {
     [users]
   )
 
+  const archivedRecords: ArchivedRecord[] = useMemo(
+    () =>
+      archived.map((u) => ({
+        id:        u.id,
+        name:      u.name,
+        extra:     u.email,
+        deletedAt: u.deletedAt!,
+        deletedBy: u.deletedBy ?? null,
+      })),
+    [archived]
+  )
+
   const columns: ColumnDef<UserRow>[] = useMemo(
     () => [
       {
         accessorKey: 'name',
-        header: ({ column }) => (
-          <Button variant="ghost" size="sm" className="-ml-3" onClick={() => column.toggleSorting()}>
-            Name
-            {column.getIsSorted() === 'asc' ? <ArrowUp className="ml-2 w-3 h-3" />
-              : column.getIsSorted() === 'desc' ? <ArrowDown className="ml-2 w-3 h-3" />
-              : <ArrowUpDown className="ml-2 w-3 h-3" />}
-          </Button>
-        ),
+        header: ({ column }) => <SortableHeader column={column} label="Name" />,
         cell: ({ row }) => <span className="font-medium">{row.getValue('name')}</span>,
       },
       {
         accessorKey: 'email',
-        header: ({ column }) => (
-          <Button variant="ghost" size="sm" className="-ml-3" onClick={() => column.toggleSorting()}>
-            Email
-            {column.getIsSorted() === 'asc' ? <ArrowUp className="ml-2 w-3 h-3" />
-              : column.getIsSorted() === 'desc' ? <ArrowDown className="ml-2 w-3 h-3" />
-              : <ArrowUpDown className="ml-2 w-3 h-3" />}
-          </Button>
-        ),
+        header: ({ column }) => <SortableHeader column={column} label="Email" />,
         cell: ({ row }) => <span className="text-muted-foreground">{row.getValue('email')}</span>,
       },
       {
@@ -522,14 +531,7 @@ function UsersPage() {
       },
       {
         accessorKey: 'createdAt',
-        header: ({ column }) => (
-          <Button variant="ghost" size="sm" className="-ml-3" onClick={() => column.toggleSorting()}>
-            Joined
-            {column.getIsSorted() === 'asc' ? <ArrowUp className="ml-2 w-3 h-3" />
-              : column.getIsSorted() === 'desc' ? <ArrowDown className="ml-2 w-3 h-3" />
-              : <ArrowUpDown className="ml-2 w-3 h-3" />}
-          </Button>
-        ),
+        header: ({ column }) => <SortableHeader column={column} label="Joined" />,
         cell: ({ row }) => (
           <span className="text-muted-foreground text-sm">
             {new Date(row.getValue('createdAt')).toLocaleDateString('en-IN')}
@@ -555,9 +557,9 @@ function UsersPage() {
                   onSuccess={refresh}
                 />
                 <DeleteDialog
-                  title="Delete User"
-                  description={<>Are you sure you want to delete <strong>{user.name}</strong>? This cannot be undone.</>}
-                  onConfirm={async () => { await deleteUser({ data: { userId: user.id } }); refresh() }}
+                  title="Archive User"
+                  description={<>Archive <strong>{user.name}</strong>? They will be hidden from active lists but can be restored later.</>}
+                  onConfirm={async () => { await softDeleteUser({ data: { userId: user.id } }); refresh() }}
                 />
               </div>
             </RoleGate>
@@ -590,7 +592,16 @@ function UsersPage() {
           <p className="text-muted-foreground">Manage user accounts and roles</p>
         </div>
         <RoleGate {...access} requireAdmin>
-          <CreateUserDialog roles={roles} branches={branches} onSuccess={refresh} />
+          <div className="flex items-center gap-2">
+            <ArchivedRecordsDrawer
+              title="Archived Users"
+              records={archivedRecords}
+              onRestore={async (id) => { await restoreUserFn({ data: { userId: id } }); refresh() }}
+              onPermanentDelete={async (id) => { await permanentDeleteUserFn({ data: { userId: id } }); refresh() }}
+              onOpenChange={(open) => { if (!open) refresh() }}
+            />
+            <CreateUserDialog roles={roles} branches={branches} onSuccess={refresh} />
+          </div>
         </RoleGate>
       </div>
 
@@ -602,151 +613,67 @@ function UsersPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 pt-0">
-          {/* Toolbar */}
-          <div className="flex items-center gap-3">
-            <Input
-              placeholder="Search users..."
-              value={globalFilter}
-              onChange={(e) => setGlobalFilter(e.target.value)}
-              className="max-w-sm"
-            />
-            <ExportButton
-              filename="users"
-              sheetName="Users"
-              data={table.getFilteredRowModel().rows.map((r) => ({
-                Name: r.original.name,
-                Email: r.original.email,
-                Roles: r.original.roles.map((ro) => ro.branchName ? `${ro.roleName} (${ro.branchName})` : ro.roleName).join(', '),
-                Joined: new Date(r.original.createdAt).toLocaleDateString('en-IN'),
-              }))}
-            />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="hidden md:flex shrink-0">
-                  <SlidersHorizontal className="w-4 h-4 mr-2" />
-                  Columns
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {table
-                  .getAllColumns()
-                  .filter((c) => c.getCanHide())
-                  .map((column) => (
-                    <DropdownMenuCheckboxItem
-                      key={column.id}
-                      className="capitalize"
-                      checked={column.getIsVisible()}
-                      onCheckedChange={(v) => column.toggleVisibility(!!v)}
-                    >
-                      {column.id}
-                    </DropdownMenuCheckboxItem>
-                  ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+          <TableToolbar
+            table={table}
+            globalFilter={globalFilter}
+            onGlobalFilterChange={setGlobalFilter}
+            searchPlaceholder="Search users..."
+            exportFilename="users"
+            exportSheetName="Users"
+            exportData={table.getFilteredRowModel().rows.map((r) => ({
+              Name: r.original.name,
+              Email: r.original.email,
+              Roles: r.original.roles.map((ro) => ro.branchName ? `${ro.roleName} (${ro.branchName})` : ro.roleName).join(', '),
+              Joined: new Date(r.original.createdAt).toLocaleDateString('en-IN'),
+            }))}
+          />
 
-          {/* Table — desktop */}
-          <div className="hidden md:block rounded-md border">
-            <Table>
-              <TableHeader>
-                {table.getHeaderGroups().map((hg) => (
-                  <TableRow key={hg.id}>
-                    {hg.headers.map((header) => (
-                      <TableHead key={header.id}>
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableHeader>
-              <TableBody>
-                {table.getRowModel().rows.length ? (
-                  table.getRowModel().rows.map((row) => (
-                    <TableRow key={row.id}>
-                      {row.getVisibleCells().map((cell) => (
-                        <TableCell key={cell.id}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={columns.length} className="text-center py-10 text-muted-foreground">
-                      No users found.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
-
-          {/* Card list — mobile */}
-          <div className="flex flex-col gap-3 md:hidden">
-            {table.getRowModel().rows.length ? (
-              table.getRowModel().rows.map((row) => {
-                const user = row.original
-                return (
-                  <div key={user.id} className="rounded-lg border bg-card p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="font-medium truncate">{user.name}</p>
-                        <p className="text-sm text-muted-foreground truncate">{user.email}</p>
-                      </div>
-                      <RoleGate {...access} requireAdmin>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <UpdateRoleDialog
-                            userId={user.id}
-                            currentRole={user.roles[0]?.roleName ?? ''}
-                            currentBranchId={user.roles[0]?.branchId ?? null}
-                            roles={roles}
-                            branches={branches}
-                            onSuccess={refresh}
-                          />
-                          <DeleteDialog
-                            title="Delete User"
-                            description={<>Are you sure you want to delete <strong>{user.name}</strong>? This cannot be undone.</>}
-                            onConfirm={async () => { await deleteUser({ data: { userId: user.id } }); refresh() }}
-                          />
-                        </div>
-                      </RoleGate>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {user.roles.length === 0 ? (
-                        <span className="text-xs text-muted-foreground">No role</span>
-                      ) : (
-                        user.roles.map((r) => (
-                          <Badge key={r.id} variant="secondary" className="text-xs">
-                            {r.branchName ? `${r.roleName} · ${r.branchName}` : r.roleName}
-                          </Badge>
-                        ))
-                      )}
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Joined {new Date(user.createdAt).toLocaleDateString('en-IN')}
-                    </p>
+          <DataTable
+            table={table}
+            columns={columns}
+            emptyMessage="No users found."
+            mobileCard={(user) => (
+              <div className="rounded-lg border bg-card p-4 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-medium truncate">{user.name}</p>
+                    <p className="text-sm text-muted-foreground truncate">{user.email}</p>
                   </div>
-                )
-              })
-            ) : (
-              <p className="text-center py-10 text-muted-foreground text-sm">No users found.</p>
+                  <RoleGate {...access} requireAdmin>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <UpdateRoleDialog
+                        userId={user.id}
+                        currentRole={user.roles[0]?.roleName ?? ''}
+                        currentBranchId={user.roles[0]?.branchId ?? null}
+                        roles={roles}
+                        branches={branches}
+                        onSuccess={refresh}
+                      />
+                      <DeleteDialog
+                        title="Archive User"
+                        description={<>Archive <strong>{user.name}</strong>? They can be restored later.</>}
+                        onConfirm={async () => { await softDeleteUser({ data: { userId: user.id } }); refresh() }}
+                      />
+                    </div>
+                  </RoleGate>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {user.roles.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">No role</span>
+                  ) : (
+                    user.roles.map((r) => (
+                      <Badge key={r.id} variant="secondary" className="text-xs">
+                        {r.branchName ? `${r.roleName} · ${r.branchName}` : r.roleName}
+                      </Badge>
+                    ))
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Joined {new Date(user.createdAt).toLocaleDateString('en-IN')}
+                </p>
+              </div>
             )}
-          </div>
-
-          {/* Pagination */}
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">
-              Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-            </p>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
-                <ChevronLeft className="w-4 h-4" />
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
-                <ChevronRight className="w-4 h-4" />
-              </Button>
-            </div>
-          </div>
+          />
         </CardContent>
       </Card>
     </div>

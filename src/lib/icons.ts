@@ -21,6 +21,9 @@ import {
   Map,
   Tag,
   Layers,
+  Factory,
+  ArrowLeftRight,
+  AlertCircle,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -47,6 +50,9 @@ export const ICON_OPTIONS: { name: string; icon: LucideIcon }[] = [
   { name: 'Map',             icon: Map             },
   { name: 'Tag',             icon: Tag             },
   { name: 'Layers',          icon: Layers          },
+  { name: 'Factory',         icon: Factory         },
+  { name: 'ArrowLeftRight',  icon: ArrowLeftRight  },
+  { name: 'AlertCircle',     icon: AlertCircle     },
 ]
 
 export function getIcon(name: string): LucideIcon {

@@ -7,7 +7,6 @@ import {
   getSortedRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
-  flexRender,
   type ColumnDef,
   type SortingState,
 } from '@tanstack/react-table'
@@ -16,9 +15,13 @@ import { adminMiddleware } from '#/middleware/admin'
 import { authMiddleware } from '#/middleware/auth'
 import { extractAccess, invalidateAccessCache } from '#/lib/rbac'
 import { logAudit } from '#/lib/logger'
+import { checkUniqueName, restoreRecord, permanentDeleteRecord } from '#/lib/crud-helpers'
 import { DeleteDialog } from '@/components/shared/DeleteDialog'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { ArchivedRecordsDrawer, type ArchivedRecord } from '@/components/shared/ArchivedRecordsDrawer'
+import { SortableHeader } from '@/components/shared/SortableHeader'
+import { DataTable } from '@/components/shared/DataTable'
+import { TableToolbar } from '@/components/shared/TableToolbar'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -47,32 +50,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Separator } from '@/components/ui/separator'
 import {
   Loader2,
   PlusCircle,
   Pencil,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
-  ChevronLeft,
-  ChevronRight,
   Shield,
   Users,
   Key,
 } from 'lucide-react'
 import { z } from 'zod'
 import { cn, getErrorMessage } from '@/lib/utils'
-import { ExportButton } from '@/components/shared/ExportButton'
 import { ALL_RESOURCES, ALL_ACTIONS, type Resource, type Action } from '#/lib/constants'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -158,10 +146,9 @@ const createRole = createServerFn({ method: 'POST' })
     return { ...parsed.data, description: data.description, pagePermissions: data.pagePermissions }
   })
   .handler(async ({ data, context }) => {
-    const existing = await db.role.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, deletedAt: null },
+    await checkUniqueName(db.role, data.name, {
+      errorMessage: 'Unable to save role. The name may already be in use.',
     })
-    if (existing) throw new Error('A role with this name already exists.')
 
     await db.$transaction(async (tx) => {
       const role = await tx.role.create({
@@ -199,10 +186,10 @@ const updateRole = createServerFn({ method: 'POST' })
     return { ...parsed.data, id: data.id, description: data.description, pagePermissions: data.pagePermissions }
   })
   .handler(async ({ data, context }) => {
-    const existing = await db.role.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, NOT: { id: data.id }, deletedAt: null },
+    await checkUniqueName(db.role, data.name, {
+      excludeId: data.id,
+      errorMessage: 'Unable to save role. The name may already be in use.',
     })
-    if (existing) throw new Error('A role with this name already exists.')
 
     const old = await db.role.findUnique({ where: { id: data.id } })
 
@@ -223,7 +210,7 @@ const updateRole = createServerFn({ method: 'POST' })
       }
     })
 
-    invalidateAccessCache() // role permissions changed — clear all cached access
+    invalidateAccessCache()
     logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'roles', resourceId: data.id, oldValue: old ? { name: old.name } : undefined, newValue: { name: data.name } }).catch(() => {})
     return { success: true }
   })
@@ -246,37 +233,24 @@ const softDeleteRole = createServerFn({ method: 'POST' })
       data: { deletedAt: new Date(), deletedBy: context.user.email },
     })
 
-    invalidateAccessCache() // role removed — clear all cached access
+    invalidateAccessCache()
     logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'roles', resourceId: data.id, oldValue: { name: role.name } }).catch(() => {})
     return { success: true }
   })
 
-const restoreRole = createServerFn({ method: 'POST' })
+const restoreRoleFn = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
   .handler(async ({ data, context }) => {
-    const role = await db.role.findUnique({ where: { id: data.id } })
-    const conflict = await db.role.findFirst({
-      where: { name: { equals: role?.name, mode: 'insensitive' }, deletedAt: null },
-    })
-    if (conflict) throw new Error(`A role named "${role?.name}" already exists. Rename it before restoring.`)
-
-    await db.role.update({
-      where: { id: data.id },
-      data: { deletedAt: null, deletedBy: null },
-    })
-
-    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'roles', resourceId: data.id, newValue: { restored: true } }).catch(() => {})
+    await restoreRecord(db.role, data.id, { userId: context.user.id, userEmail: context.user.email }, 'roles')
     return { success: true }
   })
 
-const permanentDeleteRole = createServerFn({ method: 'POST' })
+const permanentDeleteRoleFn = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
   .handler(async ({ data, context }) => {
-    const old = await db.role.findUnique({ where: { id: data.id } })
-    await db.role.delete({ where: { id: data.id } })
-    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'roles', resourceId: data.id, oldValue: old ? { name: old.name, permanentDelete: true } : undefined }).catch(() => {})
+    await permanentDeleteRecord(db.role, data.id, { userId: context.user.id, userEmail: context.user.email }, 'roles')
     return { success: true }
   })
 
@@ -352,7 +326,6 @@ function PermissionEditor({
 
   return (
     <div className="rounded-md border overflow-hidden max-h-72 overflow-y-auto">
-      {/* Header row */}
       <div className="grid grid-cols-[1fr_repeat(5,_2rem)] gap-x-1 px-3 py-2 bg-muted/50 border-b sticky top-0">
         <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
           Resource
@@ -365,7 +338,6 @@ function PermissionEditor({
         <span className="text-xs font-semibold text-muted-foreground text-center">All</span>
       </div>
 
-      {/* Resource rows */}
       {ALL_RESOURCES.map((resource, i) => {
         const current      = getActions(resource)
         const allSelected  = ALL_ACTIONS.every((a) => current.includes(a))
@@ -717,14 +689,7 @@ function RolesPage() {
     () => [
       {
         accessorKey: 'name',
-        header: ({ column }) => (
-          <Button variant="ghost" size="sm" className="-ml-3" onClick={() => column.toggleSorting()}>
-            Role
-            {column.getIsSorted() === 'asc' ? <ArrowUp className="ml-2 w-3 h-3" />
-              : column.getIsSorted() === 'desc' ? <ArrowDown className="ml-2 w-3 h-3" />
-              : <ArrowUpDown className="ml-2 w-3 h-3" />}
-          </Button>
-        ),
+        header: ({ column }) => <SortableHeader column={column} label="Role" />,
         cell: ({ row }) => (
           <div className="flex items-center gap-2">
             <Shield className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -771,14 +736,7 @@ function RolesPage() {
       },
       {
         accessorKey: 'userCount',
-        header: ({ column }) => (
-          <Button variant="ghost" size="sm" className="-ml-3" onClick={() => column.toggleSorting()}>
-            Users
-            {column.getIsSorted() === 'asc' ? <ArrowUp className="ml-2 w-3 h-3" />
-              : column.getIsSorted() === 'desc' ? <ArrowDown className="ml-2 w-3 h-3" />
-              : <ArrowUpDown className="ml-2 w-3 h-3" />}
-          </Button>
-        ),
+        header: ({ column }) => <SortableHeader column={column} label="Users" />,
         cell: ({ row }) => {
           const count = row.getValue('userCount') as number
           return (
@@ -848,8 +806,8 @@ function RolesPage() {
             <ArchivedRecordsDrawer
               title="Archived Roles"
               records={archivedRecords}
-              onRestore={async (id) => { await restoreRole({ data: { id } }); refresh() }}
-              onPermanentDelete={async (id) => { await permanentDeleteRole({ data: { id } }); refresh() }}
+              onRestore={async (id) => { await restoreRoleFn({ data: { id } }); refresh() }}
+              onPermanentDelete={async (id) => { await permanentDeleteRoleFn({ data: { id } }); refresh() }}
               onOpenChange={(open) => { if (!open) refresh() }}
             />
             <AssignRoleDialog roles={data} users={users} branches={branches} onSuccess={refresh} />
@@ -866,141 +824,83 @@ function RolesPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 pt-0">
-          {/* Toolbar */}
-          <div className="flex items-center gap-2">
-            <Input
-              placeholder="Search roles..."
-              value={globalFilter}
-              onChange={(e) => setGlobalFilter(e.target.value)}
-              className="flex-1 md:max-w-sm"
-            />
-            <ExportButton
-              filename="roles"
-              sheetName="Roles"
-              data={table.getFilteredRowModel().rows.map((r) => ({
-                Name: r.original.name,
-                Type: r.original.type,
-                Description: r.original.description ?? '',
-                Users: r.original.userCount,
-                Pages: r.original.pagePermissions.map((p) => p.resource).join(', '),
-              }))}
-            />
-          </div>
+          <TableToolbar
+            table={table}
+            globalFilter={globalFilter}
+            onGlobalFilterChange={setGlobalFilter}
+            searchPlaceholder="Search roles..."
+            exportFilename="roles"
+            exportSheetName="Roles"
+            exportData={table.getFilteredRowModel().rows.map((r) => ({
+              Name: r.original.name,
+              Type: r.original.type,
+              Description: r.original.description ?? '',
+              Users: r.original.userCount,
+              Pages: r.original.pagePermissions.map((p) => p.resource).join(', '),
+            }))}
+            showColumnVisibility={false}
+          />
 
-          {/* Table — desktop */}
-          <div className="hidden md:block rounded-md border">
-            <Table>
-              <TableHeader>
-                {table.getHeaderGroups().map((hg) => (
-                  <TableRow key={hg.id}>
-                    {hg.headers.map((header) => (
-                      <TableHead key={header.id}>
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableHeader>
-              <TableBody>
-                {table.getRowModel().rows.length ? (
-                  table.getRowModel().rows.map((row) => (
-                    <TableRow key={row.id}>
-                      {row.getVisibleCells().map((cell) => (
-                        <TableCell key={cell.id}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={columns.length} className="text-center py-10 text-muted-foreground">
-                      No roles found.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
-
-          {/* Card list — mobile */}
-          <div className="flex flex-col gap-2 md:hidden">
-            {table.getRowModel().rows.length ? (
-              table.getRowModel().rows.map((row) => {
-                const role = row.original
-                const isSystem = role.type !== 'CUSTOM'
-                return (
-                  <div key={role.id} className="rounded-lg border bg-card p-3 space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Shield className="w-4 h-4 text-muted-foreground shrink-0" />
-                        <div className="min-w-0">
-                          <p className="font-medium text-sm leading-tight truncate">{role.name}</p>
-                          {role.description && (
-                            <p className="text-xs text-muted-foreground truncate">{role.description}</p>
-                          )}
-                        </div>
+          <DataTable
+            table={table}
+            columns={columns}
+            emptyMessage="No roles found."
+            mobileCard={(role) => {
+              const isSystem = role.type !== 'CUSTOM'
+              return (
+                <div className="rounded-lg border bg-card p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Shield className="w-4 h-4 text-muted-foreground shrink-0" />
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm leading-tight truncate">{role.name}</p>
+                        {role.description && (
+                          <p className="text-xs text-muted-foreground truncate">{role.description}</p>
+                        )}
                       </div>
-                      <RoleGate {...access} requireAdmin>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <EditRoleDialog role={role} onSuccess={refresh} />
-                          <DeleteDialog
-                            title="Archive Role"
-                            description={<>Archive <strong>{role.name}</strong>? It can be restored later.</>}
-                            disabled={role.userCount > 0 || isSystem}
-                            disabledReason={
-                              isSystem
-                                ? 'System roles cannot be archived.'
-                                : role.userCount > 0
-                                ? `Has ${role.userCount} assigned user${role.userCount !== 1 ? 's' : ''}.`
-                                : undefined
-                            }
-                            onConfirm={async () => { await softDeleteRole({ data: { id: role.id } }); refresh() }}
-                          />
-                        </div>
-                      </RoleGate>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="text-xs capitalize shrink-0">
-                        {role.type.toLowerCase().replace('_', ' ')}
-                      </Badge>
-                      <Badge variant={role.userCount > 0 ? 'secondary' : 'outline'} className="gap-1 text-xs shrink-0">
-                        <Users className="w-3 h-3" />
-                        {role.userCount} user{role.userCount !== 1 ? 's' : ''}
-                      </Badge>
-                    </div>
-                    {role.pagePermissions.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {role.pagePermissions.map((pp) => (
-                          <Badge key={pp.resource} variant="secondary" className="text-xs gap-1 shrink-0">
-                            <Key className="w-2.5 h-2.5" />
-                            {pp.resource}
-                          </Badge>
-                        ))}
+                    <RoleGate {...access} requireAdmin>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <EditRoleDialog role={role} onSuccess={refresh} />
+                        <DeleteDialog
+                          title="Archive Role"
+                          description={<>Archive <strong>{role.name}</strong>? It can be restored later.</>}
+                          disabled={role.userCount > 0 || isSystem}
+                          disabledReason={
+                            isSystem
+                              ? 'System roles cannot be archived.'
+                              : role.userCount > 0
+                              ? `Has ${role.userCount} assigned user${role.userCount !== 1 ? 's' : ''}.`
+                              : undefined
+                          }
+                          onConfirm={async () => { await softDeleteRole({ data: { id: role.id } }); refresh() }}
+                        />
                       </div>
-                    )}
+                    </RoleGate>
                   </div>
-                )
-              })
-            ) : (
-              <p className="text-center py-10 text-muted-foreground text-sm">No roles found.</p>
-            )}
-          </div>
-
-          {/* Pagination */}
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">
-              Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-            </p>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
-                <ChevronLeft className="w-4 h-4" />
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
-                <ChevronRight className="w-4 h-4" />
-              </Button>
-            </div>
-          </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-xs capitalize shrink-0">
+                      {role.type.toLowerCase().replace('_', ' ')}
+                    </Badge>
+                    <Badge variant={role.userCount > 0 ? 'secondary' : 'outline'} className="gap-1 text-xs shrink-0">
+                      <Users className="w-3 h-3" />
+                      {role.userCount} user{role.userCount !== 1 ? 's' : ''}
+                    </Badge>
+                  </div>
+                  {role.pagePermissions.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {role.pagePermissions.map((pp) => (
+                        <Badge key={pp.resource} variant="secondary" className="text-xs gap-1 shrink-0">
+                          <Key className="w-2.5 h-2.5" />
+                          {pp.resource}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            }}
+          />
         </CardContent>
       </Card>
     </div>

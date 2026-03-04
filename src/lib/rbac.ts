@@ -1,7 +1,8 @@
 import { db } from '#/lib/db'
 
-// ── Permission cache (5-minute TTL) ─────────────────────────────────────────
+// ── Permission cache (5-minute TTL, bounded) ────────────────────────────────
 const CACHE_TTL_MS = 5 * 60 * 1000
+const MAX_CACHE_SIZE = 500
 const accessCache = new Map<string, { data: UserAccess; expiresAt: number }>()
 
 export function invalidateAccessCache(userId?: string) {
@@ -75,6 +76,11 @@ export async function getUserAccess(userId: string): Promise<UserAccess> {
     })),
   }
 
+  // Evict oldest entry if cache is full
+  if (accessCache.size >= MAX_CACHE_SIZE) {
+    const oldest = accessCache.keys().next().value!
+    accessCache.delete(oldest)
+  }
   accessCache.set(userId, { data: result, expiresAt: Date.now() + CACHE_TTL_MS })
   return result
 }

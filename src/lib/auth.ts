@@ -43,6 +43,14 @@ export function recordIpFailure(ip: string): void {
   } else {
     entry.count++
   }
+
+  // Sweep expired entries when map grows too large
+  if (ipFailures.size > 10_000) {
+    const now = Date.now()
+    for (const [key, val] of ipFailures) {
+      if (now - val.firstAt > IP_WINDOW_MS) ipFailures.delete(key)
+    }
+  }
 }
 
 export const auth = betterAuth({
@@ -70,7 +78,7 @@ export const auth = betterAuth({
             await db.userRole.create({
               data: { userId: user.id, roleId: basicRole.id },
             })
-            console.log('[auth] Assigned "Basic User" role to', user.email)
+            // Basic User role assigned successfully
           } else {
             console.warn('[auth] "Basic User" role not found — run seed first')
           }

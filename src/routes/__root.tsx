@@ -3,22 +3,31 @@ import {
   Scripts,
   createRootRoute,
   Outlet,
+  useRouterState,
 } from '@tanstack/react-router'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { queryClient } from '#/lib/query'
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
+import { IdleWarningDialog } from '@/components/shared/IdleWarningDialog'
+import { useIdleTimeout } from '#/hooks/useIdleTimeout'
+import { getAppSettingsFn } from '@/contexts/AppSettingProvider'
+import { useState, useEffect } from 'react'
 
 import appCss from '../styles.css?url'
+
+const PUBLIC_ROUTES = ['/login', '/register']
 
 export const Route = createRootRoute({
   head: () => ({
     meta: [
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'MIS Enterprise' },
+      { title: 'Loading…' },
     ],
     links: [{ rel: 'stylesheet', href: appCss }],
   }),
+  loader: () => getAppSettingsFn(),
   component: RootComponent,
   shellComponent: RootDocument,
   notFoundComponent: () => (
@@ -31,21 +40,37 @@ export const Route = createRootRoute({
 })
 
 function RootComponent() {
+  const { appName } = Route.useLoaderData()
+  const pathname   = useRouterState({ select: (s) => s.location.pathname })
+  const isPublic   = PUBLIC_ROUTES.includes(pathname)
+  const [showWarning, setShowWarning] = useState(false)
+
+  useEffect(() => {
+    document.title = appName
+  }, [appName])
+
+  const { resetTimers } = useIdleTimeout({
+    enabled:   !isPublic,
+    onWarning: () => setShowWarning(true),
+    onTimeout: () => setShowWarning(false),
+  })
+
+  function handleStaySignedIn() {
+    setShowWarning(false)
+    resetTimers()
+  }
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <Outlet />
-        {/*{import.meta.env.DEV && (
-          <TanStackDevtools
-            config={{ position: 'bottom-right' }}
-            plugins={[
-              {
-                name: 'Tanstack Router',
-                render: <TanStackRouterDevtoolsPanel />,
-              },
-            ]}
+        <ErrorBoundary>
+          <Outlet />
+          <IdleWarningDialog
+            open={showWarning}
+            onStaySignedIn={handleStaySignedIn}
+            onSignOut={() => setShowWarning(false)}
           />
-        )}*/}
+        </ErrorBoundary>
       </TooltipProvider>
     </QueryClientProvider>
   )

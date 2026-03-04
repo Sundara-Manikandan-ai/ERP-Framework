@@ -66,29 +66,13 @@ type PreviewRow = {
   sl: number | null
   date: string
   branch: string
-  category: string
-  subcategory: string
+  categoryPath: string  // e.g. "Cake/Layer Cake" or "Cake" for flat, supports N levels
   product: string
   unit: string
   quantity: number
   value: number
   _rowIndex: number
   _error?: string
-}
-
-type UploadBatchRow = {
-  id: string
-  filename: string
-  uploadedAt: Date
-  status: string
-  rowCount: number
-  successCount: number
-  errorCount: number
-  dateFrom: Date
-  dateTo: Date
-  transactionType: string
-  uploadedBy: string
-  errorLog: string | null
 }
 
 // ── Server Functions ───────────────────────────────────────────────
@@ -152,8 +136,7 @@ const processUpload = createServerFn({ method: 'POST' })
         sl: number | null
         date: string
         branchName: string
-        categoryName: string
-        subcategoryName: string
+        categoryPath: string   // slash-separated path e.g. "Cake/Layer Cake/Mini"
         productName: string
         unit: string
         quantity: number
@@ -200,84 +183,63 @@ const processUpload = createServerFn({ method: 'POST' })
       })
 
       // ── Pre-fetch lookups in bulk ──
-      const uniqueCategoryNames    = [...new Set(data.rows.map((r) => r.categoryName))]
-      const uniqueSubcategoryNames = [...new Set(data.rows.map((r) => r.subcategoryName))]
-      const uniqueBranchNames      = [...new Set(data.rows.map((r) => r.branchName).filter(Boolean))]
+      const uniquePaths       = [...new Set(data.rows.map((r) => r.categoryPath))]
+      const uniqueBranchNames = [...new Set(data.rows.map((r) => r.branchName).filter(Boolean))]
 
-      const [existingCategories, existingBranches] = await Promise.all([
-        tx.productCategory.findMany({ where: { name: { in: uniqueCategoryNames } } }),
-        uniqueBranchNames.length > 0
-          ? tx.branch.findMany({ where: { name: { in: uniqueBranchNames } } })
-          : Promise.resolve([]),
-      ])
+      const existingBranches = uniqueBranchNames.length > 0
+        ? await tx.branch.findMany({ where: { name: { in: uniqueBranchNames } } })
+        : []
+      const branchMap = new Map(existingBranches.map((b) => [b.name, b]))
 
-      const categoryMap = new Map(existingCategories.map((c) => [c.name, c]))
-      const branchMap   = new Map(existingBranches.map((b) => [b.name, b]))
+      // Load all categories once and build an in-memory map
+      const allCategories = await tx.productCategory.findMany()
+      // key: "parentId::name" — null parent becomes "__root__"
+      const catKey = (name: string, parentId: string | null) => `${parentId ?? '__root__'}::${name.trim().toLowerCase()}`
+      const categoryMap = new Map(allCategories.map((c) => [catKey(c.name, c.parentId), c]))
 
-      // ── Bulk-create missing categories ──
-      const missingCategoryNames = uniqueCategoryNames.filter((n) => !categoryMap.has(n))
-      if (missingCategoryNames.length > 0) {
-        await tx.productCategory.createMany({
-          data: missingCategoryNames.map((name) => ({ name })),
-          skipDuplicates: true,
-        })
-        const newCategories = await tx.productCategory.findMany({
-          where: { name: { in: missingCategoryNames } },
-        })
-        for (const c of newCategories) categoryMap.set(c.name, c)
-      }
+      // Resolve or create each segment in a path, returning the leaf node id
+      async function resolveOrCreatePath(path: string): Promise<string> {
+        const segments = path.split('/').map((s) => s.trim()).filter(Boolean)
+        if (segments.length === 0) segments.push('General')
 
-      // ── Fetch existing subcategories ──
-      const categoryIds = [...categoryMap.values()].map((c) => c.id)
-      const existingSubcategories = await tx.productSubcategory.findMany({
-        where: { categoryId: { in: categoryIds } },
-      })
-      const subcategoryMap = new Map(
-        existingSubcategories.map((s) => [`${s.name}::${s.categoryId}`, s])
-      )
-
-      // ── Bulk-create missing subcategories ──
-      const missingSubcategories: { name: string; categoryId: string }[] = []
-      for (const row of data.rows) {
-        const category = categoryMap.get(row.categoryName)
-        if (!category) continue
-        const key = `${row.subcategoryName}::${category.id}`
-        if (!subcategoryMap.has(key)) {
-          missingSubcategories.push({ name: row.subcategoryName, categoryId: category.id })
+        let parentId: string | null = null
+        for (const segment of segments) {
+          const key = catKey(segment, parentId)
+          let node = categoryMap.get(key)
+          if (!node) {
+            node = await tx.productCategory.create({ data: { name: segment, parentId } })
+            categoryMap.set(catKey(node.name, node.parentId), node)
+          }
+          parentId = node.id
         }
-      }
-      if (missingSubcategories.length > 0) {
-        await tx.productSubcategory.createMany({ data: missingSubcategories, skipDuplicates: true })
-        const newSubcategories = await tx.productSubcategory.findMany({
-          where: { categoryId: { in: categoryIds } },
-        })
-        for (const s of newSubcategories) subcategoryMap.set(`${s.name}::${s.categoryId}`, s)
+        return parentId!
       }
 
-      // ── Bulk-create missing products ──
-      const subcategoryIds = [...subcategoryMap.values()].map((s) => s.id)
-      const existingProducts = await tx.product.findMany({
-        where: { subcategoryId: { in: subcategoryIds } },
-      })
-      const productMap = new Map(existingProducts.map((p) => [`${p.name}::${p.subcategoryId}`, p]))
+      // Resolve all unique paths up front
+      const pathToLeafId = new Map<string, string>()
+      for (const path of uniquePaths) {
+        pathToLeafId.set(path, await resolveOrCreatePath(path))
+      }
 
-      const missingProducts: { name: string; subcategoryId: string; unit: string }[] = []
+      // Load all products under any resolved leaf category
+      const leafIds = [...pathToLeafId.values()]
+      const existingProducts = await tx.product.findMany({ where: { categoryId: { in: leafIds } } })
+      const productMap = new Map(existingProducts.map((p) => [`${p.name.toLowerCase()}::${p.categoryId}`, p]))
+
+      // Bulk-create missing products
+      const missingProducts: { name: string; categoryId: string; unit: string }[] = []
       for (const row of data.rows) {
-        const category    = categoryMap.get(row.categoryName)
-        if (!category) continue
-        const subcategory = subcategoryMap.get(`${row.subcategoryName}::${category.id}`)
-        if (!subcategory) continue
-        const key = `${row.productName}::${subcategory.id}`
+        const leafId = pathToLeafId.get(row.categoryPath)
+        if (!leafId) continue
+        const key = `${row.productName.toLowerCase()}::${leafId}`
         if (!productMap.has(key)) {
-          missingProducts.push({ name: row.productName, subcategoryId: subcategory.id, unit: row.unit || 'pcs' })
+          missingProducts.push({ name: row.productName, categoryId: leafId, unit: row.unit || 'pcs' })
         }
       }
       if (missingProducts.length > 0) {
         await tx.product.createMany({ data: missingProducts, skipDuplicates: true })
-        const newProducts = await tx.product.findMany({
-          where: { subcategoryId: { in: subcategoryIds } },
-        })
-        for (const p of newProducts) productMap.set(`${p.name}::${p.subcategoryId}`, p)
+        const newProducts = await tx.product.findMany({ where: { categoryId: { in: leafIds } } })
+        for (const p of newProducts) productMap.set(`${p.name.toLowerCase()}::${p.categoryId}`, p)
       }
 
       // ── Resolve each row individually — collect errors, build valid rows list ──
@@ -295,19 +257,13 @@ const processUpload = createServerFn({ method: 'POST' })
       }[] = []
 
       for (const row of data.rows) {
-        const category = categoryMap.get(row.categoryName)
-        if (!category) {
-          errors.push({ row: row.sl ?? 0, error: `Category not found: ${row.categoryName}` })
+        const leafId = pathToLeafId.get(row.categoryPath)
+        if (!leafId) {
+          errors.push({ row: row.sl ?? 0, error: `Could not resolve category path: ${row.categoryPath}` })
           continue
         }
 
-        const subcategory = subcategoryMap.get(`${row.subcategoryName}::${category.id}`)
-        if (!subcategory) {
-          errors.push({ row: row.sl ?? 0, error: `Subcategory not found: ${row.subcategoryName}` })
-          continue
-        }
-
-        const product = productMap.get(`${row.productName}::${subcategory.id}`)
+        const product = productMap.get(`${row.productName.toLowerCase()}::${leafId}`)
         if (!product) {
           errors.push({ row: row.sl ?? 0, error: `Product not found: ${row.productName}` })
           continue
@@ -504,15 +460,16 @@ function UploadPage() {
           return -1
         }
 
-        const colSl          = col(['sl', 's.no', 'sno', 'serial'])
-        const colDate        = col(['date'])
-        const colBranch      = col(['branch'])
-        const colCategory    = col(['category', 'cat'])
-        const colSubcategory = col(['subcategory', 'sub category', 'sub-category', 'subcat'])
-        const colProduct     = col(['product', 'item', 'name'])
-        const colUnit        = col(['unit', 'uom'])
-        const colQty         = col(['qty', 'quantity', 'units'])
-        const colValue       = col(['value', 'amount', 'total'])
+        const colSl           = col(['sl', 's.no', 'sno', 'serial'])
+        const colDate         = col(['date'])
+        const colBranch       = col(['branch'])
+        const colCategoryPath = col(['category_path', 'categorypath', 'cat_path'])
+        const colCategory     = col(['category', 'cat'])
+        const colSubcategory  = col(['subcategory', 'sub category', 'sub-category', 'subcat'])
+        const colProduct      = col(['product', 'item', 'name'])
+        const colUnit         = col(['unit', 'uom'])
+        const colQty          = col(['qty', 'quantity', 'units'])
+        const colValue        = col(['value', 'amount', 'total'])
 
         if (colProduct === -1) {
           setParseError('Could not find a "Product" or "Item" column in the file.')
@@ -528,12 +485,21 @@ function UploadPage() {
           const qty   = colQty   !== -1 ? parseFloat(r[colQty])   : 0
           const value = colValue !== -1 ? parseFloat(r[colValue]) : 0
 
+          // Resolve category path — support explicit path column OR category+subcategory columns
+          let categoryPath: string
+          if (colCategoryPath !== -1) {
+            categoryPath = String(r[colCategoryPath] ?? '').trim() || 'General'
+          } else {
+            const cat    = colCategory    !== -1 ? String(r[colCategory]    ?? '').trim() : 'General'
+            const subcat = colSubcategory !== -1 ? String(r[colSubcategory] ?? '').trim() : ''
+            categoryPath = subcat ? `${cat}/${subcat}` : cat
+          }
+
           rows.push({
             sl: colSl !== -1 ? Number(r[colSl]) || null : null,
             date: colDate !== -1 ? parseExcelDate(r[colDate]) : '',
             branch: colBranch !== -1 ? String(r[colBranch] ?? '').trim() : '',
-            category: colCategory !== -1 ? String(r[colCategory] ?? '').trim() : 'General',
-            subcategory: colSubcategory !== -1 ? String(r[colSubcategory] ?? '').trim() : 'General',
+            categoryPath,
             product: productVal,
             unit: colUnit !== -1 ? String(r[colUnit] ?? '').trim() : 'pcs',
             quantity: isNaN(qty)   ? 0 : qty,
@@ -608,8 +574,7 @@ function UploadPage() {
             sl: r.sl,
             date: r.date,
             branchName: r.branch,
-            categoryName: r.category || 'General',
-            subcategoryName: r.subcategory || 'General',
+            categoryPath: r.categoryPath || 'General',
             productName: r.product,
             unit: r.unit,
             quantity: r.quantity,
@@ -921,8 +886,7 @@ function UploadPage() {
                     <TableHead className="w-12">SL</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Branch</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead>Subcategory</TableHead>
+                    <TableHead>Category Path</TableHead>
                     <TableHead>Product</TableHead>
                     <TableHead>Unit</TableHead>
                     <TableHead className="text-right">Qty</TableHead>
@@ -945,13 +909,8 @@ function UploadPage() {
                       </TableCell>
                       <TableCell className="text-xs">{row.branch || '—'}</TableCell>
                       <TableCell>
-                        <Badge variant="secondary" className="text-xs font-normal">
-                          {row.category}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="text-xs font-normal">
-                          {row.subcategory}
+                        <Badge variant="secondary" className="text-xs font-normal max-w-[160px] truncate block">
+                          {row.categoryPath}
                         </Badge>
                       </TableCell>
                       <TableCell className="font-medium text-sm">{row.product}</TableCell>
@@ -980,10 +939,7 @@ function UploadPage() {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <p className="font-medium text-sm">{row.product}</p>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <Badge variant="secondary" className="text-xs">{row.category}</Badge>
-                      <Badge variant="outline" className="text-xs">{row.subcategory}</Badge>
-                    </div>
+                    <Badge variant="secondary" className="text-xs shrink-0 max-w-[150px] truncate">{row.categoryPath}</Badge>
                   </div>
                   <div className="grid grid-cols-2 gap-1 text-xs text-muted-foreground">
                     <span>Date: {row.date ? new Date(row.date).toLocaleDateString('en-IN') : '—'}</span>

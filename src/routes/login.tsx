@@ -2,6 +2,7 @@ import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useState } from 'react'
 import { createServerFn } from '@tanstack/react-start'
 import { signIn } from '#/lib/auth-client'
+import { getAppSettingsFn } from '@/contexts/AppSettingProvider'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -39,11 +40,13 @@ const recordFailedFn = createServerFn({ method: 'POST' })
 // ── Route ─────────────────────────────────────────────────────────────────────
 
 export const Route = createFileRoute('/login')({
+  loader: () => getAppSettingsFn(),
   component: LoginPage,
 })
 
 function LoginPage() {
   const router = useRouter()
+  const { appName } = Route.useLoaderData()
 
   const [email, setEmail]             = useState('')
   const [password, setPassword]       = useState('')
@@ -114,7 +117,7 @@ function LoginPage() {
             <Leaf className="w-4 h-4" style={{ color: 'oklch(0.72 0.16 160)' }} />
           </div>
           <span className="font-semibold text-sm" style={{ color: 'oklch(0.92 0.010 160)' }}>
-            MIS Enterprise
+            {appName}
           </span>
         </div>
 
@@ -131,7 +134,7 @@ function LoginPage() {
         </div>
 
         <p className="text-xs relative z-10" style={{ color: 'oklch(0.45 0.020 160)' }}>
-          © {new Date().getFullYear()} MIS Enterprise
+          © {new Date().getFullYear()} {appName}
         </p>
       </div>
 
@@ -145,7 +148,7 @@ function LoginPage() {
           >
             <Leaf className="w-4 h-4 text-primary" />
           </div>
-          <span className="font-semibold text-sm">MIS Enterprise</span>
+          <span className="font-semibold text-sm">{appName}</span>
         </div>
 
         <div className="w-full max-w-[340px] space-y-5">

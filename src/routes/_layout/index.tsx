@@ -92,7 +92,7 @@ function DashboardPage() {
     <div className="space-y-3">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-        <p className="text-muted-foreground">Welcome to MIS Enterprise</p>
+        <p className="text-muted-foreground">Welcome to the Dashboard</p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">

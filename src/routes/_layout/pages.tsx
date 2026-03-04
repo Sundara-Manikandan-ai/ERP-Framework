@@ -62,6 +62,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Unauthorized } from '@/components/shared/Unauthorized'
 import {
   Loader2,
   PlusCircle,
@@ -69,7 +70,6 @@ import {
   Pencil,
   Check,
   X,
-  ChevronDown,
   FolderOpen,
   ArrowUpDown,
   ArrowUp,
@@ -80,7 +80,7 @@ import {
 import { z } from 'zod'
 import { cn, getErrorMessage } from '@/lib/utils'
 import { ICON_OPTIONS, getIcon } from '@/lib/icons'
-import { resourceMiddleware } from '#/middleware/resource'
+import { authMiddleware } from '#/middleware/auth'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -121,8 +121,14 @@ type PageInput = z.infer<typeof pageSchema>
 // ── Server Functions ──────────────────────────────────────────────────────────
 
 const getPageData = createServerFn({ method: 'GET' })
-  .middleware([resourceMiddleware('pages')])
-  .handler(async () => {
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const hasAccess =
+      context.isAdmin ||
+      context.permissions.some((p) => p.resource === 'pages' && p.actions.includes('view'))
+
+    if (!hasAccess) return { authorized: false as const }
+
     const [pages, roles, navGroups] = await Promise.all([
       db.page.findMany({
         orderBy: { order: 'asc' },
@@ -134,7 +140,7 @@ const getPageData = createServerFn({ method: 'GET' })
       }),
       db.navGroup.findMany({ orderBy: { order: 'asc' } }),
     ])
-    return { pages, roles, navGroups }
+    return { authorized: true as const, pages, roles, navGroups }
   })
 
 const createPage = createServerFn({ method: 'POST' })
@@ -146,7 +152,7 @@ const createPage = createServerFn({ method: 'POST' })
   })
   .handler(async ({ data }) => {
     const existing = await db.page.findUnique({ where: { resource: data.resource } })
-    if (existing) throw new Error('A page with this resource key already exists.')
+    if (existing) throw new Error('Unable to create page. The resource key may already be in use.')
 
     const { navGroupId, ...rest } = data
     await db.page.create({ data: { ...rest, navGroupId: navGroupId || null } })
@@ -164,7 +170,7 @@ const updatePage = createServerFn({ method: 'POST' })
     const existing = await db.page.findFirst({
       where: { resource: data.resource, NOT: { id: data.id } },
     })
-    if (existing) throw new Error('Another page with this resource key already exists.')
+    if (existing) throw new Error('Unable to update page. The resource key may already be in use.')
 
     const { navGroupId, ...rest } = data
     await db.page.update({ where: { id: data.id }, data: { ...rest, navGroupId: navGroupId || null } })
@@ -199,7 +205,7 @@ const createNavGroup = createServerFn({ method: 'POST' })
     if (!name) throw new Error('Name is required.')
 
     const existing = await db.navGroup.findUnique({ where: { name } })
-    if (existing) throw new Error('A nav group with this name already exists.')
+    if (existing) throw new Error('Unable to save nav group. The name may already be in use.')
 
     return db.navGroup.create({ data: { name, order: data.order } })
   })
@@ -214,7 +220,7 @@ const updateNavGroup = createServerFn({ method: 'POST' })
     const existing = await db.navGroup.findFirst({
       where: { name, NOT: { id: data.id } },
     })
-    if (existing) throw new Error('A nav group with this name already exists.')
+    if (existing) throw new Error('Unable to save nav group. The name may already be in use.')
 
     return db.navGroup.update({ where: { id: data.id }, data: { name, order: data.order } })
   })
@@ -826,7 +832,9 @@ function EditPageDialog({
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 function PagesPage() {
-  const { pages, roles, navGroups } = Route.useLoaderData()
+  const loaderData = Route.useLoaderData()
+  if (!loaderData.authorized) return <Unauthorized />
+  const { pages, roles, navGroups } = loaderData
   const router = useRouter()
 
   const [sorting, setSorting]           = useState<SortingState>([{ id: 'order', desc: false }])

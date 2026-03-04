@@ -54,13 +54,14 @@ async function main() {
   console.log('  Factory')
 
   // ─────────────────────────────────────────────────────────────
-  // 3. PRODUCT CATEGORIES
+  // 3. PRODUCT CATEGORIES (root nodes — parentId: null)
   // ─────────────────────────────────────────────────────────────
   const categoryNames = ['Cake', 'Pastry', 'Mithai', 'Savoury', 'Bread', 'Biscuit', 'Chocolate', 'Seasonal']
   await Promise.all(
-    categoryNames.map((name) =>
-      db.productCategory.upsert({ where: { name }, update: {}, create: { name } })
-    )
+    categoryNames.map(async (name) => {
+      const existing = await db.productCategory.findFirst({ where: { name, parentId: null } })
+      if (!existing) await db.productCategory.create({ data: { name, parentId: null } })
+    })
   )
   console.log(`  ${categoryNames.length} product categories`)
 
@@ -226,8 +227,9 @@ async function main() {
   // 7. APP SETTINGSy
   // ─────────────────────────────────────────────────────────────
   await Promise.all([
-    db.appSetting.upsert({ where: { key: 'appName' },  update: {}, create: { key: 'appName',  value: 'MIS Enterprise' } }),
-    db.appSetting.upsert({ where: { key: 'timezone' }, update: {}, create: { key: 'timezone', value: 'Asia/Kolkata'   } }),
+    db.appSetting.upsert({ where: { key: 'appName' },    update: {}, create: { key: 'appName',    value: 'MIS Enterprise' } }),
+    db.appSetting.upsert({ where: { key: 'timezone' },   update: {}, create: { key: 'timezone',   value: 'Asia/Kolkata'   } }),
+    db.appSetting.upsert({ where: { key: 'dateFormat' }, update: {}, create: { key: 'dateFormat', value: 'dd/MM/yyyy'     } }),
   ])
   console.log('  App settings')
 

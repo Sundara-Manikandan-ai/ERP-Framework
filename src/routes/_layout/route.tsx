@@ -22,11 +22,13 @@ const getSessionWithAccess = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     let appName = 'MIS Enterprise'
+    let dateFormat = 'dd/MM/yyyy'
     try {
       const settings = await db.appSetting.findMany()
       const map: Record<string, string> = {}
       for (const s of settings) map[s.key] = s.value
-      appName = map['appName'] ?? 'MIS Enterprise'
+      appName    = map['appName']    ?? 'MIS Enterprise'
+      dateFormat = map['dateFormat'] ?? 'dd/MM/yyyy'
     } catch (e) {
       console.warn('Failed to load app settings, using defaults:', e)
     }
@@ -48,6 +50,7 @@ const pages = await db.page.findMany({
       roles:       context.roles,
       permissions: context.permissions,
       appName,
+      dateFormat,
       pages: pages.map((p) => ({
         resource: p.resource,
         label:    p.label,

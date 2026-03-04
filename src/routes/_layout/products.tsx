@@ -1,11 +1,11 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
-import { ExportButton } from '@/components/shared/ExportButton'
 import { createServerFn } from '@tanstack/react-start'
 import { useState, useMemo } from 'react'
 import { db } from '#/lib/db'
 import { adminMiddleware } from '#/middleware/admin'
 import { authMiddleware } from '#/middleware/auth'
 import { extractAccess } from '#/lib/rbac'
+import { logAudit } from '#/lib/logger'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { DeleteDialog } from '@/components/shared/DeleteDialog'
 import { Unauthorized } from '@/components/shared/Unauthorized'
@@ -14,10 +14,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
-import {
-  Card,
-  CardContent,
-} from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -33,76 +29,65 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import {
   Loader2,
   PlusCircle,
   Pencil,
   Package,
-  Layers,
-  Tag,
+  FolderOpen,
+  Folder,
   Search,
-  ChevronLeft,
   ChevronRight,
+  ChevronDown,
 } from 'lucide-react'
 import { z } from 'zod'
 import { cn, getErrorMessage } from '@/lib/utils'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type CategoryRow = {
-  id: string
-  name: string
-  subcategoryCount: number
-  productCount: number
+// Flat DB row returned from server
+type CategoryNode = {
+  id:        string
+  name:      string
+  parentId:  string | null
   createdAt: Date
-}
-
-type SubcategoryRow = {
-  id: string
-  name: string
-  categoryId: string
-  categoryName: string
-  productCount: number
-  createdAt: Date
+  updatedAt: Date
 }
 
 type ProductRow = {
-  id: string
-  name: string
-  subcategoryId: string
-  subcategoryName: string
-  categoryId: string
-  categoryName: string
-  unit: string
-  isActive: boolean
+  id:               string
+  name:             string
+  categoryId:       string
+  unit:             string
+  isActive:         boolean
   transactionCount: number
-  createdAt: Date
+  createdAt:        Date
+}
+
+// Client-side tree node built from flat list
+type TreeNode = CategoryNode & {
+  children:     TreeNode[]
+  productCount: number   // products directly in this node
+  totalCount:   number   // products in this node + all descendants
 }
 
 // ── Schemas ────────────────────────────────────────────────────────────────────
 
 const categorySchema = z.object({
-  name: z.string().trim().min(1, 'Name is required'),
-})
-
-const subcategorySchema = z.object({
-  name:       z.string().trim().min(1, 'Name is required'),
-  categoryId: z.string().min(1, 'Category is required'),
+  name:     z.string().trim().min(1, 'Name is required'),
+  parentId: z.string().nullable(),
 })
 
 const productSchema = z.object({
-  name:          z.string().trim().min(1, 'Name is required'),
-  subcategoryId: z.string().min(1, 'Subcategory is required'),
-  unit:          z.string().min(1, 'Unit is required'),
+  name:       z.string().trim().min(1, 'Name is required'),
+  categoryId: z.string().trim().min(1, 'Category is required'),
+  unit:       z.string().trim().min(1, 'Unit is required'),
 })
 
 // ── Server Functions ───────────────────────────────────────────────────────────
@@ -116,27 +101,11 @@ const getPageData = createServerFn({ method: 'GET' })
 
     if (!hasAccess) return { authorized: false as const }
 
-    const [categories, subcategories, products] = await Promise.all([
-      db.productCategory.findMany({
-        orderBy: { name: 'asc' },
-        include: {
-          _count: { select: { subcategories: true } },
-          subcategories: { include: { _count: { select: { products: true } } } },
-        },
-      }),
-      db.productSubcategory.findMany({
-        orderBy: { name: 'asc' },
-        include: {
-          category: true,
-          _count: { select: { products: true } },
-        },
-      }),
+    const [categories, products] = await Promise.all([
+      db.productCategory.findMany({ orderBy: { name: 'asc' } }),
       db.product.findMany({
         orderBy: { name: 'asc' },
-        include: {
-          subcategory: { include: { category: true } },
-          _count: { select: { transactions: true } },
-        },
+        include: { _count: { select: { transactions: true } } },
       }),
     ])
 
@@ -144,27 +113,16 @@ const getPageData = createServerFn({ method: 'GET' })
       authorized: true as const,
       access: extractAccess(context),
       categories: categories.map((c) => ({
-        id:               c.id,
-        name:             c.name,
-        subcategoryCount: c._count.subcategories,
-        productCount:     c.subcategories.reduce((sum, s) => sum + s._count.products, 0),
-        createdAt:        c.createdAt,
-      })),
-      subcategories: subcategories.map((s) => ({
-        id:           s.id,
-        name:         s.name,
-        categoryId:   s.categoryId,
-        categoryName: s.category.name,
-        productCount: s._count.products,
-        createdAt:    s.createdAt,
+        id:        c.id,
+        name:      c.name,
+        parentId:  c.parentId,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
       })),
       products: products.map((p) => ({
         id:               p.id,
         name:             p.name,
-        subcategoryId:    p.subcategoryId,
-        subcategoryName:  p.subcategory.name,
-        categoryId:       p.subcategory.categoryId,
-        categoryName:     p.subcategory.category.name,
+        categoryId:       p.categoryId,
         unit:             p.unit,
         isActive:         p.isActive,
         transactionCount: p._count.transactions,
@@ -177,87 +135,63 @@ const getPageData = createServerFn({ method: 'GET' })
 
 const createCategory = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
-  .inputValidator((data: { name: string }) => {
+  .inputValidator((data: { name: string; parentId: string | null }) => {
     const parsed = categorySchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
     return parsed.data
   })
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     const existing = await db.productCategory.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' } },
+      where: { name: { equals: data.name, mode: 'insensitive' }, parentId: data.parentId },
     })
-    if (existing) throw new Error('A category with this name already exists.')
-    await db.productCategory.create({ data: { name: data.name } })
+    if (existing) throw new Error('A category with this name already exists at this level.')
+    const cat = await db.productCategory.create({
+      data: { name: data.name, parentId: data.parentId },
+    })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'create', resource: 'products', resourceId: cat.id, newValue: { name: data.name, parentId: data.parentId } }).catch(() => {})
     return { success: true }
   })
 
 const updateCategory = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
-  .inputValidator((data: { id: string; name: string }) => {
+  .inputValidator((data: { id: string; name: string; parentId: string | null }) => {
     const parsed = categorySchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
     return { ...parsed.data, id: data.id }
   })
-  .handler(async ({ data }) => {
-    const existing = await db.productCategory.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, NOT: { id: data.id } },
+  .handler(async ({ data, context }) => {
+    // Prevent moving a node under one of its own descendants
+    if (data.parentId) {
+      let cursor = data.parentId
+      while (cursor) {
+        if (cursor === data.id) throw new Error('Cannot move a category under one of its own children.')
+        const parent = await db.productCategory.findUnique({ where: { id: cursor } })
+        cursor = parent?.parentId ?? ''
+      }
+    }
+    const conflict = await db.productCategory.findFirst({
+      where: { name: { equals: data.name, mode: 'insensitive' }, parentId: data.parentId, NOT: { id: data.id } },
     })
-    if (existing) throw new Error('A category with this name already exists.')
-    await db.productCategory.update({ where: { id: data.id }, data: { name: data.name } })
+    if (conflict) throw new Error('A category with this name already exists at this level.')
+
+    const old = await db.productCategory.findUnique({ where: { id: data.id } })
+    await db.productCategory.update({ where: { id: data.id }, data: { name: data.name, parentId: data.parentId } })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'products', resourceId: data.id, oldValue: old ? { name: old.name, parentId: old.parentId } : undefined, newValue: { name: data.name, parentId: data.parentId } }).catch(() => {})
     return { success: true }
   })
 
 const deleteCategory = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
-  .handler(async ({ data }) => {
-    const count = await db.productSubcategory.count({ where: { categoryId: data.id } })
-    if (count > 0) throw new Error(`Cannot delete — ${count} subcategor${count === 1 ? 'y' : 'ies'} exist under this category.`)
+  .handler(async ({ data, context }) => {
+    const childCount   = await db.productCategory.count({ where: { parentId: data.id } })
+    if (childCount > 0) throw new Error(`Cannot delete — ${childCount} child categor${childCount === 1 ? 'y' : 'ies'} exist under this node.`)
+    const productCount = await db.product.count({ where: { categoryId: data.id } })
+    if (productCount > 0) throw new Error(`Cannot delete — ${productCount} product${productCount === 1 ? '' : 's'} exist in this category.`)
+
+    const old = await db.productCategory.findUnique({ where: { id: data.id } })
     await db.productCategory.delete({ where: { id: data.id } })
-    return { success: true }
-  })
-
-// ── Subcategory mutations ──────────────────────────────────────────────────────
-
-const createSubcategory = createServerFn({ method: 'POST' })
-  .middleware([adminMiddleware])
-  .inputValidator((data: { name: string; categoryId: string }) => {
-    const parsed = subcategorySchema.safeParse(data)
-    if (!parsed.success) throw new Error(parsed.error.issues[0].message)
-    return parsed.data
-  })
-  .handler(async ({ data }) => {
-    const existing = await db.productSubcategory.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, categoryId: data.categoryId },
-    })
-    if (existing) throw new Error('A subcategory with this name already exists in this category.')
-    await db.productSubcategory.create({ data: { name: data.name, categoryId: data.categoryId } })
-    return { success: true }
-  })
-
-const updateSubcategory = createServerFn({ method: 'POST' })
-  .middleware([adminMiddleware])
-  .inputValidator((data: { id: string; name: string; categoryId: string }) => {
-    const parsed = subcategorySchema.safeParse(data)
-    if (!parsed.success) throw new Error(parsed.error.issues[0].message)
-    return { ...parsed.data, id: data.id }
-  })
-  .handler(async ({ data }) => {
-    const existing = await db.productSubcategory.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, categoryId: data.categoryId, NOT: { id: data.id } },
-    })
-    if (existing) throw new Error('A subcategory with this name already exists in this category.')
-    await db.productSubcategory.update({ where: { id: data.id }, data: { name: data.name, categoryId: data.categoryId } })
-    return { success: true }
-  })
-
-const deleteSubcategory = createServerFn({ method: 'POST' })
-  .middleware([adminMiddleware])
-  .inputValidator((data: { id: string }) => data)
-  .handler(async ({ data }) => {
-    const count = await db.product.count({ where: { subcategoryId: data.id } })
-    if (count > 0) throw new Error(`Cannot delete — ${count} product${count === 1 ? '' : 's'} exist under this subcategory.`)
-    await db.productSubcategory.delete({ where: { id: data.id } })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'products', resourceId: data.id, oldValue: old ? { name: old.name } : undefined }).catch(() => {})
     return { success: true }
   })
 
@@ -265,33 +199,36 @@ const deleteSubcategory = createServerFn({ method: 'POST' })
 
 const createProduct = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
-  .inputValidator((data: { name: string; subcategoryId: string; unit: string }) => {
+  .inputValidator((data: { name: string; categoryId: string; unit: string }) => {
     const parsed = productSchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
     return parsed.data
   })
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     const existing = await db.product.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, subcategoryId: data.subcategoryId },
+      where: { name: { equals: data.name, mode: 'insensitive' }, categoryId: data.categoryId },
     })
-    if (existing) throw new Error('A product with this name already exists in this subcategory.')
-    await db.product.create({ data: { name: data.name, subcategoryId: data.subcategoryId, unit: data.unit } })
+    if (existing) throw new Error('A product with this name already exists in this category.')
+    const product = await db.product.create({ data: { name: data.name, categoryId: data.categoryId, unit: data.unit } })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'create', resource: 'products', resourceId: product.id, newValue: { name: data.name, categoryId: data.categoryId, unit: data.unit } }).catch(() => {})
     return { success: true }
   })
 
 const updateProduct = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
-  .inputValidator((data: { id: string; name: string; subcategoryId: string; unit: string }) => {
+  .inputValidator((data: { id: string; name: string; categoryId: string; unit: string }) => {
     const parsed = productSchema.safeParse(data)
     if (!parsed.success) throw new Error(parsed.error.issues[0].message)
     return { ...parsed.data, id: data.id }
   })
-  .handler(async ({ data }) => {
-    const existing = await db.product.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, subcategoryId: data.subcategoryId, NOT: { id: data.id } },
+  .handler(async ({ data, context }) => {
+    const conflict = await db.product.findFirst({
+      where: { name: { equals: data.name, mode: 'insensitive' }, categoryId: data.categoryId, NOT: { id: data.id } },
     })
-    if (existing) throw new Error('A product with this name already exists in this subcategory.')
-    await db.product.update({ where: { id: data.id }, data: { name: data.name, subcategoryId: data.subcategoryId, unit: data.unit } })
+    if (conflict) throw new Error('A product with this name already exists in this category.')
+    const old = await db.product.findUnique({ where: { id: data.id } })
+    await db.product.update({ where: { id: data.id }, data: { name: data.name, categoryId: data.categoryId, unit: data.unit } })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'products', resourceId: data.id, oldValue: old ? { name: old.name, categoryId: old.categoryId } : undefined, newValue: { name: data.name, categoryId: data.categoryId } }).catch(() => {})
     return { success: true }
   })
 
@@ -306,10 +243,12 @@ const toggleProductActive = createServerFn({ method: 'POST' })
 const deleteProduct = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     const count = await db.transaction.count({ where: { productId: data.id } })
     if (count > 0) throw new Error(`Cannot delete — ${count} transaction${count === 1 ? '' : 's'} reference this product.`)
+    const old = await db.product.findUnique({ where: { id: data.id } })
     await db.product.delete({ where: { id: data.id } })
+    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'products', resourceId: data.id, oldValue: old ? { name: old.name } : undefined }).catch(() => {})
     return { success: true }
   })
 
@@ -320,135 +259,117 @@ export const Route = createFileRoute('/_layout/products')({
   component: ProductsPage,
 })
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Tree builder ───────────────────────────────────────────────────────────────
 
-const PAGE_SIZE = 10
-
-function useSortedFiltered<T extends Record<string, any>>(
-  items: T[],
-  searchKeys: (keyof T)[],
-  search: string,
-  sortKey: keyof T,
-  sortDir: 'asc' | 'desc'
-) {
-  return useMemo(() => {
-    const q = search.toLowerCase()
-    const filtered = q
-      ? items.filter((item) => searchKeys.some((k) => String(item[k] ?? '').toLowerCase().includes(q)))
-      : items
-    return [...filtered].sort((a, b) => {
-      const av = String(a[sortKey] ?? '')
-      const bv = String(b[sortKey] ?? '')
-      return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
-    })
-  }, [items, search, sortKey, sortDir])
+function buildTree(nodes: CategoryNode[], products: ProductRow[]): TreeNode[] {
+  const nodeMap = new Map<string, TreeNode>()
+  for (const n of nodes) {
+    nodeMap.set(n.id, { ...n, children: [], productCount: 0, totalCount: 0 })
+  }
+  // Count direct products per node
+  for (const p of products) {
+    const node = nodeMap.get(p.categoryId)
+    if (node) node.productCount++
+  }
+  // Assemble tree
+  const roots: TreeNode[] = []
+  for (const n of nodeMap.values()) {
+    if (n.parentId) {
+      nodeMap.get(n.parentId)?.children.push(n)
+    } else {
+      roots.push(n)
+    }
+  }
+  // Compute totalCount (products in subtree) bottom-up
+  function computeTotal(node: TreeNode): number {
+    node.totalCount = node.productCount + node.children.reduce((sum, c) => sum + computeTotal(c), 0)
+    return node.totalCount
+  }
+  roots.forEach(computeTotal)
+  return roots
 }
 
-function usePaginated<T>(items: T[], page: number) {
-  const pageCount = Math.ceil(items.length / PAGE_SIZE) || 1
-  const pageItems = items.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
-  return { pageItems, pageCount }
+// ── Get breadcrumb path for a node ────────────────────────────────────────────
+
+function getBreadcrumb(nodeId: string, flat: CategoryNode[]): string {
+  const map = new Map(flat.map((n) => [n.id, n]))
+  const parts: string[] = []
+  let cursor: CategoryNode | undefined = map.get(nodeId)
+  while (cursor) {
+    parts.unshift(cursor.name)
+    cursor = cursor.parentId ? map.get(cursor.parentId) : undefined
+  }
+  return parts.join(' / ')
 }
 
-function SortBtn({
-  label, sorted, onToggle,
-}: { label: string; sorted: 'asc' | 'desc' | false; onToggle: () => void }) {
-  return (
-    <button
-      onClick={onToggle}
-      className="flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground uppercase tracking-wide transition-colors"
-    >
-      {label}
-      <span className="opacity-50">{sorted === 'asc' ? '↑' : sorted === 'desc' ? '↓' : '↕'}</span>
-    </button>
-  )
+// ── Flatten tree to sorted list for selects ───────────────────────────────────
+
+function flattenTree(nodes: TreeNode[], depth = 0): { id: string; label: string; depth: number }[] {
+  const result: { id: string; label: string; depth: number }[] = []
+  for (const node of nodes) {
+    result.push({ id: node.id, label: node.name, depth })
+    result.push(...flattenTree(node.children, depth + 1))
+  }
+  return result
 }
 
-function PaginationBar({
-  page, pageCount, total, filtered, onPrev, onNext,
-}: {
-  page: number; pageCount: number; total: number; filtered: number
-  onPrev: () => void; onNext: () => void
-}) {
-  if (pageCount <= 1 && total === filtered) return null
-  return (
-    <div className="flex items-center justify-between pt-1">
-      <p className="text-sm text-muted-foreground">
-        {filtered < total ? `${filtered} of ${total}` : `${total} total`}
-      </p>
-      {pageCount > 1 && (
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={onPrev} disabled={page === 0}>
-            <ChevronLeft className="w-4 h-4" />
-          </Button>
-          <span className="text-sm text-muted-foreground">{page + 1} / {pageCount}</span>
-          <Button variant="outline" size="sm" onClick={onNext} disabled={page >= pageCount - 1}>
-            <ChevronRight className="w-4 h-4" />
-          </Button>
-        </div>
-      )}
-    </div>
-  )
-}
+// ── Unit options ───────────────────────────────────────────────────────────────
 
-function TabBtn({
-  active, onClick, icon: Icon, label, count,
-}: { active: boolean; onClick: () => void; icon: React.ElementType; label: string; count: number }) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        'flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
-        active
-          ? 'border-primary text-primary'
-          : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-      )}
-    >
-      <Icon className="w-4 h-4" />
-      {label}
-      <Badge variant={active ? 'default' : 'secondary'} className="text-xs h-5 px-1.5">{count}</Badge>
-    </button>
-  )
-}
+const UNIT_OPTIONS = ['pcs', 'kg', 'g', 'box', 'dozen', 'tray', 'bag', 'litre']
 
 // ── Category Dialog ────────────────────────────────────────────────────────────
 
 function CategoryDialog({
-  mode, category, onSuccess,
-}: { mode: 'create' | 'edit'; category?: CategoryRow; onSuccess: () => void }) {
-  const [open, setOpen]           = useState(false)
+  mode, category, parentId, flatCategories, onSuccess, onCreated, trigger,
+  open: controlledOpen, onOpenChange: controlledOnOpenChange,
+}: {
+  mode: 'create' | 'edit'
+  category?: CategoryNode
+  parentId?: string | null       // pre-fill parent for "Add child" action
+  flatCategories: { id: string; label: string; depth: number }[]
+  onSuccess: () => void
+  onCreated?: () => void
+  trigger?: React.ReactNode
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+}) {
+  const [internalOpen, setInternalOpen] = useState(false)
+  const isControlled = controlledOpen !== undefined
+  const open = isControlled ? controlledOpen : internalOpen
+  const setOpen = isControlled ? (controlledOnOpenChange ?? (() => {})) : setInternalOpen
+
   const [name, setName]           = useState(category?.name ?? '')
+  const [parent, setParent]       = useState<string>(category?.parentId ?? parentId ?? '__root__')
   const [isPending, setIsPending] = useState(false)
   const [error, setError]         = useState<string | null>(null)
 
   function handleOpenChange(v: boolean) {
     setOpen(v)
-    if (v) { setName(category?.name ?? ''); setError(null) }
-  }
-
-  async function handleSubmit() {
-    setError(null)
-    setIsPending(true)
-    try {
-      if (mode === 'create') await createCategory({ data: { name } })
-      else await updateCategory({ data: { id: category!.id, name } })
-      setOpen(false)
-      onSuccess()
-    } catch (e: unknown) {
-      setError(getErrorMessage(e, 'Something went wrong.'))
-    } finally {
-      setIsPending(false)
+    if (v) {
+      setName(category?.name ?? '')
+      setParent(category?.parentId ?? parentId ?? '__root__')
+      setError(null)
     }
   }
 
+  async function handleSubmit() {
+    setError(null); setIsPending(true)
+    try {
+      const resolvedParent = parent === '__root__' ? null : parent
+      if (mode === 'create') await createCategory({ data: { name, parentId: resolvedParent } })
+      else await updateCategory({ data: { id: category!.id, name, parentId: resolvedParent } })
+      setOpen(false); onSuccess(); onCreated?.()
+    } catch (e: unknown) { setError(getErrorMessage(e, 'Something went wrong.')) }
+    finally { setIsPending(false) }
+  }
+
+  const defaultTrigger = mode === 'create'
+    ? <Button size="sm" className="min-w-0 text-xs sm:text-sm px-2 sm:px-3"><PlusCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5 shrink-0" /><span className="hidden sm:inline">Add Category</span><span className="sm:hidden">Category</span></Button>
+    : <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><Pencil className="w-3.5 h-3.5" /></Button>
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        {mode === 'create'
-          ? <Button size="sm"><PlusCircle className="w-4 h-4 mr-2" />Add Category</Button>
-          : <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><Pencil className="w-3.5 h-3.5" /></Button>
-        }
-      </DialogTrigger>
+      {!isControlled && <DialogTrigger asChild>{trigger ?? defaultTrigger}</DialogTrigger>}
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{mode === 'create' ? 'Add Category' : 'Edit Category'}</DialogTitle>
@@ -457,11 +378,26 @@ function CategoryDialog({
           <div className="space-y-1.5">
             <Label>Name</Label>
             <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Cake"
+              value={name} onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Layer Cake"
               onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Parent Category <span className="text-muted-foreground text-xs">(optional)</span></Label>
+            <Select value={parent} onValueChange={setParent}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__root__">— Root (top level) —</SelectItem>
+                {flatCategories
+                  .filter((c) => c.id !== category?.id)
+                  .map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {'  '.repeat(c.depth)}{c.depth > 0 ? '└ ' : ''}{c.label}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
           </div>
           {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
         </div>
@@ -477,77 +413,210 @@ function CategoryDialog({
   )
 }
 
-// ── Subcategory Dialog ─────────────────────────────────────────────────────────
+// ── Category Tree Picker (Popover) ──────────────────────────────────────────
 
-function SubcategoryDialog({
-  mode, subcategory, categories, defaultCategoryId, onSuccess,
+function CategoryTreePicker({
+  categories, value, onChange,
+}: {
+  categories: CategoryNode[]
+  value: string
+  onChange: (id: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  const { childMap, nodeMap } = useMemo(() => {
+    const childMap = new Map<string | null, CategoryNode[]>()
+    const nodeMap = new Map<string, CategoryNode>()
+    for (const c of categories) {
+      nodeMap.set(c.id, c)
+      const key = c.parentId ?? null
+      if (!childMap.has(key)) childMap.set(key, [])
+      childMap.get(key)!.push(c)
+    }
+    return { childMap, nodeMap }
+  }, [categories])
+
+  const selectedLabel = useMemo(() => {
+    if (!value) return 'Select category...'
+    const parts: string[] = []
+    let cur: CategoryNode | undefined = nodeMap.get(value)
+    while (cur) {
+      parts.unshift(cur.name)
+      cur = cur.parentId ? nodeMap.get(cur.parentId) : undefined
+    }
+    return parts.join(' / ')
+  }, [value, nodeMap])
+
+  function toggleExpand(id: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function select(id: string) {
+    onChange(id)
+    setOpen(false)
+  }
+
+  function renderNodes(parentId: string | null, depth: number): React.ReactNode {
+    const children = childMap.get(parentId)
+    if (!children?.length) return null
+    return children.map((node) => {
+      const hasChildren = childMap.has(node.id) && childMap.get(node.id)!.length > 0
+      const isExpanded = expanded.has(node.id)
+      const isSelected = node.id === value
+      return (
+        <div key={node.id}>
+          <div
+            className={cn(
+              'flex items-center gap-1.5 py-1 pr-2 text-sm cursor-pointer rounded-sm hover:bg-accent',
+              isSelected && 'bg-accent font-medium'
+            )}
+            style={{ paddingLeft: `${depth * 12 + 6}px` }}
+            onClick={() => select(node.id)}
+          >
+            {hasChildren ? (
+              <ChevronDown
+                className={cn('w-3 h-3 shrink-0 transition-transform', !isExpanded && '-rotate-90')}
+                onClick={(e) => { e.stopPropagation(); toggleExpand(node.id) }}
+              />
+            ) : (
+              <span className="w-3 shrink-0" />
+            )}
+            <Folder className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+            <span className="truncate">{node.name}</span>
+          </div>
+          {hasChildren && isExpanded && renderNodes(node.id, depth + 1)}
+        </div>
+      )
+    })
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="w-full justify-between font-normal h-9 px-3"
+        >
+          <span className="truncate text-sm">{selectedLabel}</span>
+          <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="min-w-[var(--radix-popover-trigger-width)] p-0">
+        <div className="max-h-64 overflow-y-auto py-1">
+          {renderNodes(null, 0)}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ── Product Dialog ─────────────────────────────────────────────────────────────
+
+function ProductDialog({
+  mode, product, categories, flatCategories, defaultCategoryId, onSuccess, trigger,
 }: {
   mode: 'create' | 'edit'
-  subcategory?: SubcategoryRow
-  categories: CategoryRow[]
+  product?: ProductRow
+  categories: CategoryNode[]
+  flatCategories: { id: string; label: string; depth: number }[]
   defaultCategoryId?: string
   onSuccess: () => void
+  trigger?: React.ReactNode
 }) {
-  const [open, setOpen]               = useState(false)
-  const [name, setName]               = useState(subcategory?.name ?? '')
-  const [categoryId, setCategoryId]   = useState(subcategory?.categoryId ?? defaultCategoryId ?? '')
-  const [isPending, setIsPending]     = useState(false)
-  const [error, setError]             = useState<string | null>(null)
+  const router = useRouter()
+  const [open, setOpen]             = useState(false)
+  const [name, setName]             = useState(product?.name ?? '')
+  const [unit, setUnit]             = useState(product?.unit ?? 'pcs')
+  const [categoryId, setCategoryId] = useState(product?.categoryId ?? defaultCategoryId ?? '')
+  const [isPending, setIsPending]   = useState(false)
+  const [error, setError]           = useState<string | null>(null)
+  const [showNewCat, setShowNewCat] = useState(false)
 
   function handleOpenChange(v: boolean) {
     setOpen(v)
     if (v) {
-      setName(subcategory?.name ?? '')
-      setCategoryId(subcategory?.categoryId ?? defaultCategoryId ?? '')
+      setName(product?.name ?? ''); setUnit(product?.unit ?? 'pcs')
+      setCategoryId(product?.categoryId ?? defaultCategoryId ?? '')
       setError(null)
+      setShowNewCat(false)
     }
   }
 
   async function handleSubmit() {
-    setError(null)
-    setIsPending(true)
+    setError(null); setIsPending(true)
     try {
-      if (mode === 'create') await createSubcategory({ data: { name, categoryId } })
-      else await updateSubcategory({ data: { id: subcategory!.id, name, categoryId } })
-      setOpen(false)
-      onSuccess()
-    } catch (e: unknown) {
-      setError(getErrorMessage(e, 'Something went wrong.'))
-    } finally {
-      setIsPending(false)
+      if (mode === 'create') await createProduct({ data: { name, categoryId, unit } })
+      else await updateProduct({ data: { id: product!.id, name, categoryId, unit } })
+      setOpen(false); onSuccess()
+    } catch (e: unknown) { setError(getErrorMessage(e, 'Something went wrong.')) }
+    finally { setIsPending(false) }
+  }
+
+  async function handleCategoryCreated() {
+    await router.invalidate()
+    const fresh = await getPageData()
+    if (fresh.authorized) {
+      // Select the newest category (most recent createdAt)
+      const newest = fresh.categories.reduce((a, b) =>
+        new Date(b.createdAt) > new Date(a.createdAt) ? b : a
+      )
+      if (newest) setCategoryId(newest.id)
     }
   }
 
+  const defaultTrigger = mode === 'create'
+    ? <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-1"><PlusCircle className="w-3 h-3" />Product</Button>
+    : <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><Pencil className="w-3.5 h-3.5" /></Button>
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        {mode === 'create'
-          ? <Button size="sm"><PlusCircle className="w-4 h-4 mr-2" />Add Subcategory</Button>
-          : <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><Pencil className="w-3.5 h-3.5" /></Button>
-        }
-      </DialogTrigger>
+      <DialogTrigger asChild>{trigger ?? defaultTrigger}</DialogTrigger>
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{mode === 'create' ? 'Add Subcategory' : 'Edit Subcategory'}</DialogTitle>
-        </DialogHeader>
+        <DialogHeader><DialogTitle>{mode === 'create' ? 'Add Product' : 'Edit Product'}</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
           <div className="space-y-1.5">
             <Label>Category</Label>
-            <Select value={categoryId} onValueChange={setCategoryId}>
-              <SelectTrigger className="w-full"><SelectValue placeholder="Select category..." /></SelectTrigger>
-              <SelectContent>
-                {categories.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-1.5">
+              <div className="flex-1">
+                <CategoryTreePicker categories={categories} value={categoryId} onChange={setCategoryId} />
+              </div>
+              <Button
+                type="button" variant="outline" size="icon"
+                className="h-9 w-9 shrink-0"
+                title="Create new category"
+                onClick={() => setShowNewCat(true)}
+              >
+                <PlusCircle className="w-4 h-4" />
+              </Button>
+            </div>
+            <CategoryDialog
+              mode="create"
+              flatCategories={flatCategories}
+              onSuccess={onSuccess}
+              onCreated={handleCategoryCreated}
+              open={showNewCat}
+              onOpenChange={setShowNewCat}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Product Name</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Chocolate Mud Cake" />
           </div>
           <div className="space-y-1.5">
-            <Label>Name</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Layer Cake"
-              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
-            />
+            <Label>Unit</Label>
+            <Select value={unit} onValueChange={setUnit}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>{UNIT_OPTIONS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
+            </Select>
           </div>
           {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
         </div>
@@ -563,604 +632,404 @@ function SubcategoryDialog({
   )
 }
 
-// ── Product Dialog ─────────────────────────────────────────────────────────────
+// ── Tree Node Component ────────────────────────────────────────────────────────
 
-const UNIT_OPTIONS = ['pcs', 'kg', 'g', 'box', 'dozen', 'tray', 'bag', 'litre']
-
-function ProductDialog({
-  mode, product, categories, subcategories, defaultSubcategoryId, onSuccess,
+function TreeNodeRow({
+  node, products, selected, onSelect, expanded, onToggle,
+  depth, access, flatCategories, onSuccess,
 }: {
-  mode: 'create' | 'edit'
-  product?: ProductRow
-  categories: CategoryRow[]
-  subcategories: SubcategoryRow[]
-  defaultSubcategoryId?: string
-  onSuccess: () => void
+  node:           TreeNode
+  products:       ProductRow[]
+  selected:       { kind: 'category' | 'product'; id: string } | null
+  onSelect:       (s: { kind: 'category' | 'product'; id: string }) => void
+  expanded:       Set<string>
+  onToggle:       (id: string) => void
+  depth:          number
+  access:         { isAdmin: boolean; permissions: any[] }
+  flatCategories: { id: string; label: string; depth: number }[]
+  onSuccess:      () => void
 }) {
-  const [open, setOpen]                   = useState(false)
-  const [name, setName]                   = useState(product?.name ?? '')
-  const [unit, setUnit]                   = useState(product?.unit ?? 'pcs')
-  const [categoryId, setCategoryId]       = useState(
-    product?.categoryId ?? subcategories.find((s) => s.id === defaultSubcategoryId)?.categoryId ?? ''
-  )
-  const [subcategoryId, setSubcategoryId] = useState(product?.subcategoryId ?? defaultSubcategoryId ?? '')
-  const [isPending, setIsPending]         = useState(false)
-  const [error, setError]                 = useState<string | null>(null)
-
-  const filteredSubs = subcategories.filter((s) => s.categoryId === categoryId)
-
-  function handleOpenChange(v: boolean) {
-    setOpen(v)
-    if (v) {
-      setName(product?.name ?? '')
-      setUnit(product?.unit ?? 'pcs')
-      const sc = subcategories.find((s) => s.id === (product?.subcategoryId ?? defaultSubcategoryId))
-      setCategoryId(product?.categoryId ?? sc?.categoryId ?? '')
-      setSubcategoryId(product?.subcategoryId ?? defaultSubcategoryId ?? '')
-      setError(null)
-    }
-  }
-
-  function handleCategoryChange(val: string) {
-    setCategoryId(val)
-    setSubcategoryId('')
-  }
-
-  async function handleSubmit() {
-    setError(null)
-    setIsPending(true)
-    try {
-      if (mode === 'create') await createProduct({ data: { name, subcategoryId, unit } })
-      else await updateProduct({ data: { id: product!.id, name, subcategoryId, unit } })
-      setOpen(false)
-      onSuccess()
-    } catch (e: unknown) {
-      setError(getErrorMessage(e, 'Something went wrong.'))
-    } finally {
-      setIsPending(false)
-    }
-  }
+  const isOpen     = expanded.has(node.id)
+  const isSelected = selected?.kind === 'category' && selected.id === node.id
+  const hasChildren = node.children.length > 0
+  const nodeProds  = products.filter((p) => p.categoryId === node.id)
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        {mode === 'create'
-          ? <Button size="sm"><PlusCircle className="w-4 h-4 mr-2" />Add Product</Button>
-          : <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><Pencil className="w-3.5 h-3.5" /></Button>
-        }
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{mode === 'create' ? 'Add Product' : 'Edit Product'}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 py-2">
-          <div className="space-y-1.5">
-            <Label>Category</Label>
-            <Select value={categoryId} onValueChange={handleCategoryChange}>
-              <SelectTrigger className="w-full"><SelectValue placeholder="Select category..." /></SelectTrigger>
-              <SelectContent>
-                {categories.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Subcategory</Label>
-            <Select value={subcategoryId} onValueChange={setSubcategoryId} disabled={!categoryId}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder={categoryId ? 'Select subcategory...' : 'Select category first'} />
-              </SelectTrigger>
-              <SelectContent>
-                {filteredSubs.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Product Name</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Chocolate Fudge Cake"
-              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+    <li>
+      <div
+        className={cn(
+          'flex items-center gap-1 px-2 py-1.5 rounded-md cursor-pointer select-none transition-colors group',
+          isSelected ? 'bg-primary/10 text-primary' : 'hover:bg-muted/60'
+        )}
+        style={{ paddingLeft: `${8 + depth * 16}px` }}
+        onClick={() => {
+          onSelect({ kind: 'category', id: node.id })
+          if (hasChildren || nodeProds.length > 0) onToggle(node.id)
+        }}
+      >
+        {/* Expand arrow */}
+        <span className={cn('w-3.5 shrink-0 transition-transform', isOpen && 'rotate-90')}>
+          {(hasChildren || nodeProds.length > 0)
+            ? <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+            : <span className="w-3.5 inline-block" />}
+        </span>
+
+        {/* Folder icon */}
+        {isOpen
+          ? <FolderOpen className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+          : <Folder className="w-3.5 h-3.5 shrink-0 text-amber-500" />}
+
+        <span className="text-sm flex-1 truncate font-medium">{node.name}</span>
+
+        {node.totalCount > 0 && (
+          <Badge variant="secondary" className="text-xs h-4 px-1 font-normal shrink-0">{node.totalCount}</Badge>
+        )}
+      </div>
+
+      {isOpen && (
+        <ul>
+          {/* Child category nodes */}
+          {node.children.map((child) => (
+            <TreeNodeRow
+              key={child.id}
+              node={child} products={products} selected={selected}
+              onSelect={onSelect} expanded={expanded} onToggle={onToggle}
+              depth={depth + 1} access={access} flatCategories={flatCategories}
+              onSuccess={onSuccess}
             />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Unit</Label>
-            <Select value={unit} onValueChange={setUnit}>
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {UNIT_OPTIONS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)} disabled={isPending}>Cancel</Button>
-          <Button onClick={handleSubmit} disabled={isPending || !name.trim() || !subcategoryId}>
-            {isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-            {mode === 'create' ? 'Create' : 'Save'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          ))}
+
+          {/* Products directly in this node */}
+          {nodeProds.map((prod) => {
+            const isProdSelected = selected?.kind === 'product' && selected.id === prod.id
+            return (
+              <li key={prod.id}>
+                <div
+                  className={cn(
+                    'flex items-center gap-1 px-2 py-1.5 rounded-md cursor-pointer select-none transition-colors',
+                    isProdSelected ? 'bg-primary/10 text-primary' : 'hover:bg-muted/60'
+                  )}
+                  style={{ paddingLeft: `${8 + (depth + 1) * 16 + 4}px` }}
+                  onClick={(e) => { e.stopPropagation(); onSelect({ kind: 'product', id: prod.id }) }}
+                >
+                  <Package className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                  <span className="text-sm flex-1 truncate">{prod.name}</span>
+                  {!prod.isActive && (
+                    <Badge variant="secondary" className="text-xs h-4 px-1 font-normal shrink-0">off</Badge>
+                  )}
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </li>
   )
+}
+
+// ── Detail Panel ───────────────────────────────────────────────────────────────
+
+function DetailPanel({
+  selected, categories, products, flatCategories, access, onSuccess,
+}: {
+  selected:       { kind: 'category' | 'product'; id: string } | null
+  categories:     CategoryNode[]
+  products:       ProductRow[]
+  flatCategories: { id: string; label: string; depth: number }[]
+  access:         { isAdmin: boolean; permissions: any[] }
+  onSuccess:      () => void
+}) {
+  if (!selected) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground gap-3 py-16">
+        <Folder className="w-10 h-10 opacity-20" />
+        <p className="text-sm">Select a category or product from the tree to view details</p>
+      </div>
+    )
+  }
+
+  if (selected.kind === 'category') {
+    const cat      = categories.find((c) => c.id === selected.id)
+    if (!cat) return null
+    const children = categories.filter((c) => c.parentId === selected.id)
+    const prods    = products.filter((p) => p.categoryId === selected.id)
+    const breadcrumb = getBreadcrumb(selected.id, categories)
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground truncate">{breadcrumb.includes('/') ? breadcrumb.split('/').slice(0, -1).join(' / ') : 'Root'}</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <FolderOpen className="w-4 h-4 text-amber-500 shrink-0" />
+              <h2 className="text-lg sm:text-xl font-semibold truncate">{cat.name}</h2>
+            </div>
+          </div>
+          <RoleGate {...access} requireAdmin>
+            <div className="flex items-center gap-1 shrink-0">
+              <CategoryDialog mode="edit" category={cat} flatCategories={flatCategories} onSuccess={onSuccess} />
+              <DeleteDialog
+                title="Delete Category"
+                description={<>Delete <strong>{cat.name}</strong>? This cannot be undone.</>}
+                disabled={children.length > 0 || prods.length > 0}
+                disabledReason={
+                  children.length > 0 ? `${children.length} child categor${children.length === 1 ? 'y' : 'ies'} must be removed first.`
+                  : prods.length > 0 ? `${prods.length} product${prods.length === 1 ? '' : 's'} must be removed first.`
+                  : undefined
+                }
+                onConfirm={async () => { await deleteCategory({ data: { id: cat.id } }); onSuccess() }}
+              />
+            </div>
+          </RoleGate>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-lg border bg-muted/30 px-4 py-3 text-center">
+            <p className="text-2xl font-bold">{children.length}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Sub-categories</p>
+          </div>
+          <div className="rounded-lg border bg-muted/30 px-4 py-3 text-center">
+            <p className="text-2xl font-bold">{prods.length}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Direct products</p>
+          </div>
+        </div>
+
+        {/* Sub-categories */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-medium">Sub-categories</p>
+            <RoleGate {...access} requireAdmin>
+              <CategoryDialog mode="create" parentId={cat.id} flatCategories={flatCategories} onSuccess={onSuccess} />
+            </RoleGate>
+          </div>
+          {children.length === 0
+            ? <p className="text-sm text-muted-foreground italic">No sub-categories.</p>
+            : <div className="space-y-1">
+                {children.map((child) => (
+                  <div key={child.id} className="flex items-center gap-2 px-3 py-2 rounded-md border bg-card text-sm">
+                    <Folder className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                    <span className="flex-1 truncate">{child.name}</span>
+                  </div>
+                ))}
+              </div>
+          }
+        </div>
+
+        {/* Products in this category */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-medium">Products in this category</p>
+            <RoleGate {...access} requireAdmin>
+              <ProductDialog mode="create" categories={categories} flatCategories={flatCategories} defaultCategoryId={cat.id} onSuccess={onSuccess} />
+            </RoleGate>
+          </div>
+          {prods.length === 0
+            ? <p className="text-sm text-muted-foreground italic">No products directly in this category.</p>
+            : <div className="space-y-1">
+                {prods.map((prod) => (
+                  <div key={prod.id} className="flex items-center gap-2 px-3 py-2 rounded-md border bg-card text-sm">
+                    <Package className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                    <span className="flex-1 truncate">{prod.name}</span>
+                    <span className="text-xs text-muted-foreground">{prod.unit}</span>
+                    <Badge variant={prod.isActive ? 'default' : 'secondary'} className="text-xs h-4 px-1">{prod.isActive ? 'on' : 'off'}</Badge>
+                  </div>
+                ))}
+              </div>
+          }
+        </div>
+      </div>
+    )
+  }
+
+  if (selected.kind === 'product') {
+    const prod = products.find((p) => p.id === selected.id)
+    if (!prod) return null
+    const breadcrumb = getBreadcrumb(prod.categoryId, categories)
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground truncate">{breadcrumb}</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <Package className="w-4 h-4 text-muted-foreground shrink-0" />
+              <h2 className="text-lg sm:text-xl font-semibold truncate">{prod.name}</h2>
+            </div>
+          </div>
+          <RoleGate {...access} requireAdmin>
+            <div className="flex items-center gap-1 shrink-0">
+              <ProductDialog mode="edit" product={prod} categories={categories} flatCategories={flatCategories} onSuccess={onSuccess} />
+              <DeleteDialog
+                title="Delete Product"
+                description={<>Delete <strong>{prod.name}</strong>? This cannot be undone.</>}
+                disabled={prod.transactionCount > 0}
+                disabledReason={prod.transactionCount > 0 ? `${prod.transactionCount} transaction${prod.transactionCount === 1 ? '' : 's'} reference this product.` : undefined}
+                onConfirm={async () => { await deleteProduct({ data: { id: prod.id } }); onSuccess() }}
+              />
+            </div>
+          </RoleGate>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-lg border bg-muted/30 px-4 py-3 text-center">
+            <p className="text-2xl font-bold">{prod.unit}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Unit</p>
+          </div>
+          <div className="rounded-lg border bg-muted/30 px-4 py-3 text-center">
+            <p className="text-2xl font-bold">{prod.transactionCount}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Transactions</p>
+          </div>
+        </div>
+
+        <div className="rounded-lg border p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">Active</span>
+            <RoleGate {...access} requireAdmin fallback={
+              <Badge variant={prod.isActive ? 'default' : 'secondary'} className="text-xs">{prod.isActive ? 'Active' : 'Inactive'}</Badge>
+            }>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={prod.isActive}
+                  onCheckedChange={async (v) => { await toggleProductActive({ data: { id: prod.id, isActive: v } }); onSuccess() }}
+                />
+                <span className="text-sm text-muted-foreground">{prod.isActive ? 'Active' : 'Inactive'}</span>
+              </div>
+            </RoleGate>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">Category path</span>
+            <span className="text-sm text-muted-foreground text-right max-w-[60%] truncate">{breadcrumb}</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return null
 }
 
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
 function ProductsPage() {
   const loaderData = Route.useLoaderData()
+  const router     = useRouter()
+
+  const [selected, setSelected] = useState<{ kind: 'category' | 'product'; id: string } | null>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [search, setSearch]     = useState('')
+
   if (!loaderData.authorized) return <Unauthorized />
-  const router  = useRouter()
-  const { access, categories, subcategories, products } = loaderData
-  const refresh = () => router.invalidate()
+  const { categories, products, access } = loaderData
 
-  const [tab, setTab] = useState<'categories' | 'subcategories' | 'products'>('categories')
+  function refresh() { router.invalidate() }
 
-  const [filterCategoryId,    setFilterCategoryId]    = useState('')
-  const [filterSubcategoryId, setFilterSubcategoryId] = useState('')
-
-  const [catSearch,  setCatSearch]  = useState('')
-  const [subSearch,  setSubSearch]  = useState('')
-  const [prodSearch, setProdSearch] = useState('')
-
-  const [catSort,  setCatSort]  = useState<{ key: keyof CategoryRow;    dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' })
-  const [subSort,  setSubSort]  = useState<{ key: keyof SubcategoryRow; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' })
-  const [prodSort, setProdSort] = useState<{ key: keyof ProductRow;     dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' })
-
-  const [catPage,  setCatPage]  = useState(0)
-  const [subPage,  setSubPage]  = useState(0)
-  const [prodPage, setProdPage] = useState(0)
-
-  function toggleSort<T>(
-    current: { key: keyof T; dir: 'asc' | 'desc' },
-    key: keyof T,
-    set: (v: { key: keyof T; dir: 'asc' | 'desc' }) => void,
-    resetPage: () => void
-  ) {
-    set(current.key === key ? { key, dir: current.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
-    resetPage()
+  function toggleExpand(id: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
-  const filteredSubcategories = useMemo(
-    () => filterCategoryId ? subcategories.filter((s) => s.categoryId === filterCategoryId) : subcategories,
-    [subcategories, filterCategoryId]
-  )
-  const filteredProducts = useMemo(() => {
-    let p = products
-    if (filterCategoryId)    p = p.filter((pr) => pr.categoryId === filterCategoryId)
-    if (filterSubcategoryId) p = p.filter((pr) => pr.subcategoryId === filterSubcategoryId)
-    return p
-  }, [products, filterCategoryId, filterSubcategoryId])
+  const tree = useMemo(() => buildTree(categories, products), [categories, products])
+  const flatCategories = useMemo(() => flattenTree(tree), [tree])
 
-  const sortedCats  = useSortedFiltered(categories,            ['name'],                                          catSearch,  catSort.key,  catSort.dir)
-  const sortedSubs  = useSortedFiltered(filteredSubcategories, ['name', 'categoryName'],                          subSearch,  subSort.key,  subSort.dir)
-  const sortedProds = useSortedFiltered(filteredProducts,      ['name', 'categoryName', 'subcategoryName', 'unit'], prodSearch, prodSort.key, prodSort.dir)
-
-  const { pageItems: catItems,  pageCount: catPageCount  } = usePaginated(sortedCats,  catPage)
-  const { pageItems: subItems,  pageCount: subPageCount  } = usePaginated(sortedSubs,  subPage)
-  const { pageItems: prodItems, pageCount: prodPageCount } = usePaginated(sortedProds, prodPage)
-
-  function drillToSubs(categoryId: string) {
-    setFilterCategoryId(categoryId)
-    setFilterSubcategoryId('')
-    setSubSearch('')
-    setSubPage(0)
-    setTab('subcategories')
+  function expandAll() {
+    const keys = categories.map((c) => c.id)
+    setExpanded(new Set(keys))
+  }
+  function collapseAll() {
+    setExpanded(new Set())
+    setSelected(null)
   }
 
-  function drillToProds(opts: { categoryId?: string; subcategoryId?: string }) {
-    if (opts.categoryId)    setFilterCategoryId(opts.categoryId)
-    if (opts.subcategoryId) setFilterSubcategoryId(opts.subcategoryId)
-    setProdSearch('')
-    setProdPage(0)
-    setTab('products')
+  // Filter tree nodes by search
+  const q = search.toLowerCase()
+
+  function nodeMatchesSearch(node: TreeNode): boolean {
+    if (node.name.toLowerCase().includes(q)) return true
+    if (products.some((p) => p.categoryId === node.id && p.name.toLowerCase().includes(q))) return true
+    return node.children.some(nodeMatchesSearch)
   }
 
-  const activeCategoryName    = categories.find((c) => c.id === filterCategoryId)?.name
-  const activeSubcategoryName = subcategories.find((s) => s.id === filterSubcategoryId)?.name
+  const visibleRoots = q ? tree.filter(nodeMatchesSearch) : tree
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Products</h1>
-          <p className="text-muted-foreground">Manage categories, subcategories and products</p>
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Products</h1>
+          <p className="text-muted-foreground text-sm hidden sm:block">Manage your product category tree and products</p>
         </div>
+        <RoleGate {...access} requireAdmin>
+          <div className="flex items-center gap-2">
+            <ProductDialog
+              mode="create" categories={categories} flatCategories={flatCategories} onSuccess={refresh}
+              trigger={<Button size="sm" className="min-w-0 text-xs sm:text-sm px-2 sm:px-3"><PlusCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5 shrink-0" /><span className="hidden sm:inline">Add Product</span><span className="sm:hidden">Product</span></Button>}
+            />
+            <CategoryDialog mode="create" flatCategories={flatCategories} onSuccess={refresh} />
+          </div>
+        </RoleGate>
       </div>
 
-      <Card>
-        {/* Tab bar */}
-        <div className="flex border-b overflow-x-auto">
-          <TabBtn active={tab === 'categories'}    onClick={() => setTab('categories')}    icon={Layers}  label="Categories"    count={categories.length} />
-          <TabBtn active={tab === 'subcategories'} onClick={() => setTab('subcategories')} icon={Tag}     label="Subcategories" count={subcategories.length} />
-          <TabBtn active={tab === 'products'}      onClick={() => setTab('products')}      icon={Package} label="Products"      count={products.length} />
+      <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-3 items-start">
+
+        {/* ── Tree Panel ── */}
+        <div className="rounded-lg border bg-card overflow-hidden">
+          {/* Toolbar */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30">
+            <div className="relative flex-1">
+              <Search className="absolute left-2 top-2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+              <Input
+                placeholder="Search..."
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); if (e.target.value) expandAll() }}
+                className="pl-7 h-7 text-xs"
+              />
+            </div>
+            <button onClick={expandAll}   className="text-xs text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap">+All</button>
+            <button onClick={collapseAll} className="text-xs text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap">−All</button>
+          </div>
+
+          {/* Tree */}
+          <div className="p-1.5 max-h-[400px] md:max-h-[600px] overflow-y-auto">
+            {visibleRoots.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8 italic">
+                {search ? 'No matches.' : 'No categories yet. Add one to get started.'}
+              </p>
+            ) : (
+              <ul className="space-y-0.5">
+                {visibleRoots.map((node) => (
+                  <TreeNodeRow
+                    key={node.id}
+                    node={node} products={products} selected={selected}
+                    onSelect={setSelected} expanded={expanded} onToggle={toggleExpand}
+                    depth={0} access={access} flatCategories={flatCategories}
+                    onSuccess={refresh}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Footer stats */}
+          <div className="border-t px-3 py-2 text-xs text-muted-foreground bg-muted/20">
+            {categories.length} categories · {products.length} products
+          </div>
         </div>
 
-        <CardContent className="p-3 space-y-3">
+        {/* ── Detail Panel ── */}
+        <div className="rounded-lg border bg-card p-3 sm:p-4 min-h-[200px] md:min-h-[300px]">
+          <DetailPanel
+            selected={selected}
+            categories={categories} products={products}
+            flatCategories={flatCategories}
+            access={access} onSuccess={refresh}
+          />
+        </div>
 
-          {/* ── CATEGORIES ─────────────────────────────────────────── */}
-          {tab === 'categories' && (
-            <>
-              {/* Toolbar */}
-              <div className="flex items-center gap-2">
-                <div className="relative flex-1 md:max-w-sm">
-                  <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground pointer-events-none" />
-                  <Input
-                    placeholder="Search categories..."
-                    value={catSearch}
-                    onChange={(e) => { setCatSearch(e.target.value); setCatPage(0) }}
-                    className="pl-8"
-                  />
-                </div>
-                <RoleGate {...access} requireAdmin>
-                  <CategoryDialog mode="create" onSuccess={refresh} />
-                </RoleGate>
-              </div>
-
-              {/* Desktop table */}
-              <div className="hidden md:block rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead><SortBtn label="Name" sorted={catSort.key === 'name' ? catSort.dir : false} onToggle={() => toggleSort(catSort, 'name', setCatSort, () => setCatPage(0))} /></TableHead>
-                      <TableHead className="text-right">Subcategories</TableHead>
-                      <TableHead className="text-right">Products</TableHead>
-                      <TableHead className="w-20" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {catItems.length ? catItems.map((cat) => (
-                      <TableRow key={cat.id}>
-                        <TableCell className="font-medium">{cat.name}</TableCell>
-                        <TableCell className="text-right">
-                          <button onClick={() => drillToSubs(cat.id)} className="text-sm text-primary hover:underline underline-offset-2">
-                            {cat.subcategoryCount}
-                          </button>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <button onClick={() => drillToProds({ categoryId: cat.id })} className="text-sm text-primary hover:underline underline-offset-2">
-                            {cat.productCount}
-                          </button>
-                        </TableCell>
-                        <TableCell>
-                          <RoleGate {...access} requireAdmin>
-                            <div className="flex items-center justify-end gap-1">
-                              <CategoryDialog mode="edit" category={cat} onSuccess={refresh} />
-                              <DeleteDialog
-                                title="Delete Category"
-                                description={<>Are you sure you want to delete <strong>{cat.name}</strong>? This cannot be undone.</>}
-                                disabled={cat.subcategoryCount > 0}
-                                disabledReason={cat.subcategoryCount > 0 ? `${cat.subcategoryCount} subcategor${cat.subcategoryCount === 1 ? 'y' : 'ies'} must be removed first.` : undefined}
-                                onConfirm={async () => { await deleteCategory({ data: { id: cat.id } }); refresh() }}
-                              />
-                            </div>
-                          </RoleGate>
-                        </TableCell>
-                      </TableRow>
-                    )) : (
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-center py-10 text-muted-foreground">No categories found.</TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {/* Mobile cards */}
-              <div className="flex flex-col gap-3 md:hidden">
-                {catItems.length ? catItems.map((cat) => (
-                  <div key={cat.id} className="rounded-lg border bg-card p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Layers className="w-4 h-4 text-muted-foreground shrink-0" />
-                        <span className="font-medium truncate">{cat.name}</span>
-                      </div>
-                      <RoleGate {...access} requireAdmin>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <CategoryDialog mode="edit" category={cat} onSuccess={refresh} />
-                          <DeleteDialog
-                            title="Delete Category"
-                            description={<>Are you sure you want to delete <strong>{cat.name}</strong>?</>}
-                            disabled={cat.subcategoryCount > 0}
-                            disabledReason={cat.subcategoryCount > 0 ? `${cat.subcategoryCount} subcategor${cat.subcategoryCount === 1 ? 'y' : 'ies'} must be removed first.` : undefined}
-                            onConfirm={async () => { await deleteCategory({ data: { id: cat.id } }); refresh() }}
-                          />
-                        </div>
-                      </RoleGate>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <button onClick={() => drillToSubs(cat.id)} className="flex items-center gap-1.5 text-xs text-primary hover:underline">
-                        <Tag className="w-3 h-3" />
-                        {cat.subcategoryCount} subcategor{cat.subcategoryCount === 1 ? 'y' : 'ies'}
-                      </button>
-                      <span className="text-muted-foreground/40">·</span>
-                      <button onClick={() => drillToProds({ categoryId: cat.id })} className="flex items-center gap-1.5 text-xs text-primary hover:underline">
-                        <Package className="w-3 h-3" />
-                        {cat.productCount} product{cat.productCount === 1 ? '' : 's'}
-                      </button>
-                    </div>
-                  </div>
-                )) : (
-                  <p className="text-center py-10 text-muted-foreground text-sm">No categories found.</p>
-                )}
-              </div>
-
-              <PaginationBar page={catPage} pageCount={catPageCount} total={categories.length} filtered={sortedCats.length} onPrev={() => setCatPage((p) => p - 1)} onNext={() => setCatPage((p) => p + 1)} />
-            </>
-          )}
-
-          {/* ── SUBCATEGORIES ──────────────────────────────────────── */}
-          {tab === 'subcategories' && (
-            <>
-              {/* Toolbar */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="relative flex-1 min-w-0 md:max-w-sm">
-                  <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground pointer-events-none" />
-                  <Input
-                    placeholder="Search subcategories..."
-                    value={subSearch}
-                    onChange={(e) => { setSubSearch(e.target.value); setSubPage(0) }}
-                    className="pl-8"
-                  />
-                </div>
-                {filterCategoryId && (
-                  <Badge
-                    variant="secondary"
-                    className="gap-1 cursor-pointer hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
-                    onClick={() => setFilterCategoryId('')}
-                  >
-                    {activeCategoryName} ×
-                  </Badge>
-                )}
-                <RoleGate {...access} requireAdmin>
-                  <SubcategoryDialog mode="create" categories={categories} defaultCategoryId={filterCategoryId} onSuccess={refresh} />
-                </RoleGate>
-              </div>
-
-              {/* Desktop table */}
-              <div className="hidden md:block rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead><SortBtn label="Name" sorted={subSort.key === 'name' ? subSort.dir : false} onToggle={() => toggleSort(subSort, 'name', setSubSort, () => setSubPage(0))} /></TableHead>
-                      <TableHead><SortBtn label="Category" sorted={subSort.key === 'categoryName' ? subSort.dir : false} onToggle={() => toggleSort(subSort, 'categoryName', setSubSort, () => setSubPage(0))} /></TableHead>
-                      <TableHead className="text-right">Products</TableHead>
-                      <TableHead className="w-20" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {subItems.length ? subItems.map((sub) => (
-                      <TableRow key={sub.id}>
-                        <TableCell className="font-medium">{sub.name}</TableCell>
-                        <TableCell>
-                          <Badge variant="secondary" className="text-xs font-normal">{sub.categoryName}</Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <button onClick={() => drillToProds({ categoryId: sub.categoryId, subcategoryId: sub.id })} className="text-sm text-primary hover:underline underline-offset-2">
-                            {sub.productCount}
-                          </button>
-                        </TableCell>
-                        <TableCell>
-                          <RoleGate {...access} requireAdmin>
-                            <div className="flex items-center justify-end gap-1">
-                              <SubcategoryDialog mode="edit" subcategory={sub} categories={categories} onSuccess={refresh} />
-                              <DeleteDialog
-                                title="Delete Subcategory"
-                                description={<>Are you sure you want to delete <strong>{sub.name}</strong>? This cannot be undone.</>}
-                                disabled={sub.productCount > 0}
-                                disabledReason={sub.productCount > 0 ? `${sub.productCount} product${sub.productCount === 1 ? '' : 's'} must be removed first.` : undefined}
-                                onConfirm={async () => { await deleteSubcategory({ data: { id: sub.id } }); refresh() }}
-                              />
-                            </div>
-                          </RoleGate>
-                        </TableCell>
-                      </TableRow>
-                    )) : (
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-center py-10 text-muted-foreground">No subcategories found.</TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {/* Mobile cards */}
-              <div className="flex flex-col gap-3 md:hidden">
-                {subItems.length ? subItems.map((sub) => (
-                  <div key={sub.id} className="rounded-lg border bg-card p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Tag className="w-4 h-4 text-muted-foreground shrink-0" />
-                        <span className="font-medium truncate">{sub.name}</span>
-                      </div>
-                      <RoleGate {...access} requireAdmin>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <SubcategoryDialog mode="edit" subcategory={sub} categories={categories} onSuccess={refresh} />
-                          <DeleteDialog
-                            title="Delete Subcategory"
-                            description={<>Are you sure you want to delete <strong>{sub.name}</strong>?</>}
-                            disabled={sub.productCount > 0}
-                            disabledReason={sub.productCount > 0 ? `${sub.productCount} product${sub.productCount === 1 ? '' : 's'} must be removed first.` : undefined}
-                            onConfirm={async () => { await deleteSubcategory({ data: { id: sub.id } }); refresh() }}
-                          />
-                        </div>
-                      </RoleGate>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <Badge variant="secondary" className="text-xs">{sub.categoryName}</Badge>
-                      <button onClick={() => drillToProds({ categoryId: sub.categoryId, subcategoryId: sub.id })} className="flex items-center gap-1.5 text-xs text-primary hover:underline">
-                        <Package className="w-3 h-3" />
-                        {sub.productCount} product{sub.productCount === 1 ? '' : 's'}
-                      </button>
-                    </div>
-                  </div>
-                )) : (
-                  <p className="text-center py-10 text-muted-foreground text-sm">No subcategories found.</p>
-                )}
-              </div>
-
-              <PaginationBar page={subPage} pageCount={subPageCount} total={subcategories.length} filtered={sortedSubs.length} onPrev={() => setSubPage((p) => p - 1)} onNext={() => setSubPage((p) => p + 1)} />
-            </>
-          )}
-
-          {/* ── PRODUCTS ───────────────────────────────────────────── */}
-          {tab === 'products' && (
-            <>
-              {/* Toolbar */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="relative flex-1 min-w-0 md:max-w-sm">
-                  <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground pointer-events-none" />
-                  <Input
-                    placeholder="Search products..."
-                    value={prodSearch}
-                    onChange={(e) => { setProdSearch(e.target.value); setProdPage(0) }}
-                    className="pl-8"
-                  />
-                </div>
-                <ExportButton
-                  filename="products"
-                  sheetName="Products"
-                  data={sortedProds.map((p) => ({
-                    Name: p.name,
-                    Category: p.categoryName,
-                    Subcategory: p.subcategoryName,
-                    Unit: p.unit,
-                  }))}
-                />
-                {filterCategoryId && (
-                  <Badge
-                    variant="secondary"
-                    className="gap-1 cursor-pointer hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
-                    onClick={() => { setFilterCategoryId(''); setFilterSubcategoryId('') }}
-                  >
-                    {activeCategoryName} ×
-                  </Badge>
-                )}
-                {filterSubcategoryId && (
-                  <Badge
-                    variant="outline"
-                    className="gap-1 cursor-pointer hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
-                    onClick={() => setFilterSubcategoryId('')}
-                  >
-                    {activeSubcategoryName} ×
-                  </Badge>
-                )}
-                <RoleGate {...access} requireAdmin>
-                  <ProductDialog mode="create" categories={categories} subcategories={subcategories} defaultSubcategoryId={filterSubcategoryId} onSuccess={refresh} />
-                </RoleGate>
-              </div>
-
-              {/* Desktop table */}
-              <div className="hidden md:block rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead><SortBtn label="Product" sorted={prodSort.key === 'name' ? prodSort.dir : false} onToggle={() => toggleSort(prodSort, 'name', setProdSort, () => setProdPage(0))} /></TableHead>
-                      <TableHead><SortBtn label="Category" sorted={prodSort.key === 'categoryName' ? prodSort.dir : false} onToggle={() => toggleSort(prodSort, 'categoryName', setProdSort, () => setProdPage(0))} /></TableHead>
-                      <TableHead><SortBtn label="Subcategory" sorted={prodSort.key === 'subcategoryName' ? prodSort.dir : false} onToggle={() => toggleSort(prodSort, 'subcategoryName', setProdSort, () => setProdPage(0))} /></TableHead>
-                      <TableHead>Unit</TableHead>
-                      <TableHead>Active</TableHead>
-                      <TableHead className="w-20" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {prodItems.length ? prodItems.map((prod) => (
-                      <TableRow key={prod.id}>
-                        <TableCell className="font-medium">{prod.name}</TableCell>
-                        <TableCell><Badge variant="secondary" className="text-xs font-normal">{prod.categoryName}</Badge></TableCell>
-                        <TableCell><Badge variant="outline" className="text-xs font-normal">{prod.subcategoryName}</Badge></TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{prod.unit}</TableCell>
-                        <TableCell>
-                          <RoleGate {...access} requireAdmin fallback={
-                            <Badge variant={prod.isActive ? 'default' : 'secondary'} className="text-xs">
-                              {prod.isActive ? 'Active' : 'Inactive'}
-                            </Badge>
-                          }>
-                            <Switch
-                              checked={prod.isActive}
-                              onCheckedChange={async (v) => { await toggleProductActive({ data: { id: prod.id, isActive: v } }); refresh() }}
-                            />
-                          </RoleGate>
-                        </TableCell>
-                        <TableCell>
-                          <RoleGate {...access} requireAdmin>
-                            <div className="flex items-center justify-end gap-1">
-                              <ProductDialog mode="edit" product={prod} categories={categories} subcategories={subcategories} onSuccess={refresh} />
-                              <DeleteDialog
-                                title="Delete Product"
-                                description={<>Are you sure you want to delete <strong>{prod.name}</strong>? This cannot be undone.</>}
-                                disabled={prod.transactionCount > 0}
-                                disabledReason={prod.transactionCount > 0 ? `${prod.transactionCount} transaction${prod.transactionCount === 1 ? '' : 's'} reference this product.` : undefined}
-                                onConfirm={async () => { await deleteProduct({ data: { id: prod.id } }); refresh() }}
-                              />
-                            </div>
-                          </RoleGate>
-                        </TableCell>
-                      </TableRow>
-                    )) : (
-                      <TableRow>
-                        <TableCell colSpan={6} className="text-center py-10 text-muted-foreground">No products found.</TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {/* Mobile cards */}
-              <div className="flex flex-col gap-3 md:hidden">
-                {prodItems.length ? prodItems.map((prod) => (
-                  <div key={prod.id} className="rounded-lg border bg-card p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Package className="w-4 h-4 text-muted-foreground shrink-0" />
-                        <span className="font-medium truncate">{prod.name}</span>
-                      </div>
-                      <RoleGate {...access} requireAdmin>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <ProductDialog mode="edit" product={prod} categories={categories} subcategories={subcategories} onSuccess={refresh} />
-                          <DeleteDialog
-                            title="Delete Product"
-                            description={<>Are you sure you want to delete <strong>{prod.name}</strong>?</>}
-                            disabled={prod.transactionCount > 0}
-                            disabledReason={prod.transactionCount > 0 ? `${prod.transactionCount} transaction${prod.transactionCount === 1 ? '' : 's'} reference this product.` : undefined}
-                            onConfirm={async () => { await deleteProduct({ data: { id: prod.id } }); refresh() }}
-                          />
-                        </div>
-                      </RoleGate>
-                    </div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant="secondary" className="text-xs">{prod.categoryName}</Badge>
-                      <Badge variant="outline" className="text-xs">{prod.subcategoryName}</Badge>
-                      <span className="text-xs text-muted-foreground">{prod.unit}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <RoleGate {...access} requireAdmin fallback={
-                        <Badge variant={prod.isActive ? 'default' : 'secondary'} className="text-xs">
-                          {prod.isActive ? 'Active' : 'Inactive'}
-                        </Badge>
-                      }>
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={prod.isActive}
-                            onCheckedChange={async (v) => { await toggleProductActive({ data: { id: prod.id, isActive: v } }); refresh() }}
-                          />
-                          <span className="text-xs text-muted-foreground">{prod.isActive ? 'Active' : 'Inactive'}</span>
-                        </div>
-                      </RoleGate>
-                    </div>
-                  </div>
-                )) : (
-                  <p className="text-center py-10 text-muted-foreground text-sm">No products found.</p>
-                )}
-              </div>
-
-              <PaginationBar page={prodPage} pageCount={prodPageCount} total={filteredProducts.length} filtered={sortedProds.length} onPrev={() => setProdPage((p) => p - 1)} onNext={() => setProdPage((p) => p + 1)} />
-            </>
-          )}
-
-        </CardContent>
-      </Card>
+      </div>
     </div>
   )
 }

@@ -13,7 +13,42 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Loader2, Save } from 'lucide-react'
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const TIMEZONES = [
+  'Asia/Kolkata',
+  'Asia/Colombo',
+  'Asia/Dhaka',
+  'Asia/Karachi',
+  'Asia/Kathmandu',
+  'Asia/Singapore',
+  'Asia/Shanghai',
+  'Asia/Tokyo',
+  'Asia/Dubai',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'Pacific/Auckland',
+  'Australia/Sydney',
+  'Africa/Nairobi',
+  'UTC',
+]
+
+const DATE_FORMATS = [
+  { value: 'dd/MM/yyyy', label: 'dd/MM/yyyy  (31/12/2025)' },
+  { value: 'MM/dd/yyyy', label: 'MM/dd/yyyy  (12/31/2025)' },
+  { value: 'yyyy-MM-dd', label: 'yyyy-MM-dd  (2025-12-31)' },
+  { value: 'dd-MM-yyyy', label: 'dd-MM-yyyy  (31-12-2025)' },
+  { value: 'dd MMM yyyy', label: 'dd MMM yyyy  (31 Dec 2025)' },
+  { value: 'MMM dd, yyyy', label: 'MMM dd, yyyy  (Dec 31, 2025)' },
+]
 
 // ── Server Functions ──────────────────────────────────────────────────────────
 
@@ -31,8 +66,9 @@ const getPageData = createServerFn({ method: 'GET' })
   })
 
 const SETTING_VALIDATORS: Record<string, (v: string) => string | null> = {
-  appName:  (v) => v.trim().length < 1 ? 'App name cannot be empty' : null,
-  timezone: (v) => v.trim().length < 1 ? 'Timezone cannot be empty' : null,
+  appName:    (v) => v.trim().length < 1 ? 'App name cannot be empty' : null,
+  timezone:   (v) => v.trim().length < 1 ? 'Timezone cannot be empty' : null,
+  dateFormat: (v) => v.trim().length < 1 ? 'Date format cannot be empty' : null,
 }
 
 const updateSetting = createServerFn({ method: 'POST' })
@@ -96,6 +132,46 @@ function SettingRow({
     }
   }
 
+  function renderInput() {
+    if (settingKey === 'timezone') {
+      return (
+        <Select value={value} onValueChange={setValue}>
+          <SelectTrigger className="flex-1">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {TIMEZONES.map((tz) => (
+              <SelectItem key={tz} value={tz}>{tz}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )
+    }
+
+    if (settingKey === 'dateFormat') {
+      return (
+        <Select value={value} onValueChange={setValue}>
+          <SelectTrigger className="flex-1">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {DATE_FORMATS.map((f) => (
+              <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )
+    }
+
+    return (
+      <Input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="flex-1"
+      />
+    )
+  }
+
   return (
     <div className="flex flex-col gap-1.5 py-3 border-b last:border-0">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -106,11 +182,7 @@ function SettingRow({
           </p>
         </div>
         <div className="flex items-center gap-2 flex-1 min-w-48 max-w-sm">
-          <Input
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            className="flex-1"
-          />
+          {renderInput()}
           <RoleGate {...access} requireAdmin>
             <Button
               size="sm"

@@ -7,7 +7,6 @@ import {
   getSortedRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
-  flexRender,
   type ColumnDef,
   type SortingState,
   type VisibilityState,
@@ -17,9 +16,13 @@ import { adminMiddleware } from '#/middleware/admin'
 import { authMiddleware } from '#/middleware/auth'
 import { extractAccess } from '#/lib/rbac'
 import { logAudit } from '#/lib/logger'
+import { checkUniqueName, softDeleteRecord, restoreRecord, permanentDeleteRecord } from '#/lib/crud-helpers'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { DeleteDialog } from '@/components/shared/DeleteDialog'
 import { ArchivedRecordsDrawer, type ArchivedRecord } from '@/components/shared/ArchivedRecordsDrawer'
+import { SortableHeader } from '@/components/shared/SortableHeader'
+import { DataTable } from '@/components/shared/DataTable'
+import { TableToolbar } from '@/components/shared/TableToolbar'
 import { getErrorMessage } from '@/lib/utils'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
@@ -50,31 +53,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Loader2,
   PlusCircle,
   Pencil,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
-  ChevronLeft,
-  ChevronRight,
-  SlidersHorizontal,
   ArrowLeftRight,
 } from 'lucide-react'
 import { z } from 'zod'
@@ -95,8 +78,8 @@ type TxTypeRow = {
 
 const txTypeSchema = z.object({
   name:        z.string().trim().min(2, 'Name must be at least 2 characters'),
-  description: z.string().optional(),
-  pairedWith:  z.string().nullable().optional(),
+  description: z.string().trim().optional(),
+  pairedWith:  z.string().trim().nullable().optional(),
 })
 
 type TxTypeInput = z.infer<typeof txTypeSchema>
@@ -137,10 +120,9 @@ const createTransactionType = createServerFn({ method: 'POST' })
     return parsed.data
   })
   .handler(async ({ data, context }) => {
-    const existing = await db.transactionType.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, deletedAt: null },
+    await checkUniqueName(db.transactionType, data.name, {
+      errorMessage: 'Unable to save transaction type. The name may already be in use.',
     })
-    if (existing) throw new Error('A transaction type with this name already exists.')
     if (data.pairedWith) {
       const paired = await db.transactionType.findFirst({
         where: { name: { equals: data.pairedWith, mode: 'insensitive' }, deletedAt: null },
@@ -166,10 +148,10 @@ const updateTransactionType = createServerFn({ method: 'POST' })
     return { ...parsed.data, id: data.id, isActive: data.isActive }
   })
   .handler(async ({ data, context }) => {
-    const existing = await db.transactionType.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, NOT: { id: data.id }, deletedAt: null },
+    await checkUniqueName(db.transactionType, data.name, {
+      excludeId: data.id,
+      errorMessage: 'Unable to save transaction type. The name may already be in use.',
     })
-    if (existing) throw new Error('A transaction type with this name already exists.')
     if (data.pairedWith) {
       const paired = await db.transactionType.findFirst({
         where: { name: { equals: data.pairedWith, mode: 'insensitive' }, NOT: { id: data.id }, deletedAt: null },
@@ -194,21 +176,10 @@ const softDeleteTransactionType = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
   .handler(async ({ data, context }) => {
-    const [transactionCount, batchCount] = await Promise.all([
-      db.transaction.count({ where: { transactionTypeId: data.id } }),
-      db.uploadBatch.count({ where: { transactionTypeId: data.id } }),
-    ])
-    if (transactionCount > 0)
-      throw new Error(`Cannot archive — ${transactionCount} transaction(s) use this type.`)
-    if (batchCount > 0)
-      throw new Error(`Cannot archive — ${batchCount} upload batch(es) use this type.`)
-
-    const old = await db.transactionType.findUnique({ where: { id: data.id } })
-    await db.transactionType.update({
-      where: { id: data.id },
-      data: { deletedAt: new Date(), deletedBy: context.user.email },
-    })
-    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'transactionTypes', resourceId: data.id, oldValue: old ? { name: old.name } : undefined }).catch(() => {})
+    await softDeleteRecord(db.transactionType, data.id, [
+      { model: db.transaction, where: { transactionTypeId: data.id }, errorTemplate: 'Cannot archive — {count} transaction(s) use this type.' },
+      { model: db.uploadBatch, where: { transactionTypeId: data.id }, errorTemplate: 'Cannot archive — {count} upload batch(es) use this type.' },
+    ], { userId: context.user.id, userEmail: context.user.email }, 'transactionTypes')
     return { success: true }
   })
 
@@ -216,17 +187,7 @@ const restoreTransactionType = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
   .handler(async ({ data, context }) => {
-    const tt = await db.transactionType.findUnique({ where: { id: data.id } })
-    const conflict = await db.transactionType.findFirst({
-      where: { name: { equals: tt?.name, mode: 'insensitive' }, deletedAt: null },
-    })
-    if (conflict) throw new Error(`A transaction type named "${tt?.name}" already exists. Rename it before restoring.`)
-
-    await db.transactionType.update({
-      where: { id: data.id },
-      data: { deletedAt: null, deletedBy: null },
-    })
-    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'transactionTypes', resourceId: data.id, newValue: { restored: true } }).catch(() => {})
+    await restoreRecord(db.transactionType, data.id, { userId: context.user.id, userEmail: context.user.email }, 'transactionTypes')
     return { success: true }
   })
 
@@ -234,9 +195,7 @@ const permanentDeleteTransactionType = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
   .handler(async ({ data, context }) => {
-    const old = await db.transactionType.findUnique({ where: { id: data.id } })
-    await db.transactionType.delete({ where: { id: data.id } })
-    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'transactionTypes', resourceId: data.id, oldValue: old ? { name: old.name, permanentDelete: true } : undefined }).catch(() => {})
+    await permanentDeleteRecord(db.transactionType, data.id, { userId: context.user.id, userEmail: context.user.email }, 'transactionTypes')
     return { success: true }
   })
 
@@ -492,14 +451,7 @@ function TransactionTypesPage() {
     () => [
       {
         accessorKey: 'name',
-        header: ({ column }) => (
-          <Button variant="ghost" size="sm" className="-ml-3" onClick={() => column.toggleSorting()}>
-            Name
-            {column.getIsSorted() === 'asc' ? <ArrowUp className="ml-2 w-3 h-3" />
-              : column.getIsSorted() === 'desc' ? <ArrowDown className="ml-2 w-3 h-3" />
-              : <ArrowUpDown className="ml-2 w-3 h-3" />}
-          </Button>
-        ),
+        header: ({ column }) => <SortableHeader column={column} label="Name" />,
         cell: ({ row }) => (
           <div className="flex items-center gap-2">
             <ArrowLeftRight className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -540,14 +492,7 @@ function TransactionTypesPage() {
       },
       {
         accessorKey: 'transactionCount',
-        header: ({ column }) => (
-          <Button variant="ghost" size="sm" className="-ml-3" onClick={() => column.toggleSorting()}>
-            Transactions
-            {column.getIsSorted() === 'asc' ? <ArrowUp className="ml-2 w-3 h-3" />
-              : column.getIsSorted() === 'desc' ? <ArrowDown className="ml-2 w-3 h-3" />
-              : <ArrowUpDown className="ml-2 w-3 h-3" />}
-          </Button>
-        ),
+        header: ({ column }) => <SortableHeader column={column} label="Transactions" />,
         cell: ({ row }) => {
           const count = row.getValue('transactionCount') as number
           return <Badge variant={count > 0 ? 'secondary' : 'outline'}>{count}</Badge>
@@ -555,14 +500,7 @@ function TransactionTypesPage() {
       },
       {
         accessorKey: 'createdAt',
-        header: ({ column }) => (
-          <Button variant="ghost" size="sm" className="-ml-3" onClick={() => column.toggleSorting()}>
-            Created
-            {column.getIsSorted() === 'asc' ? <ArrowUp className="ml-2 w-3 h-3" />
-              : column.getIsSorted() === 'desc' ? <ArrowDown className="ml-2 w-3 h-3" />
-              : <ArrowUpDown className="ml-2 w-3 h-3" />}
-          </Button>
-        ),
+        header: ({ column }) => <SortableHeader column={column} label="Created" />,
         cell: ({ row }) => (
           <span className="text-muted-foreground text-sm">
             {new Date(row.getValue('createdAt')).toLocaleDateString('en-IN')}
@@ -639,137 +577,56 @@ function TransactionTypesPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 pt-0">
-          {/* Toolbar */}
-          <div className="flex items-center gap-3">
-            <Input
-              placeholder="Search types..."
-              value={globalFilter}
-              onChange={(e) => setGlobalFilter(e.target.value)}
-              className="flex-1 md:max-w-sm"
-            />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="hidden md:flex shrink-0">
-                  <SlidersHorizontal className="w-4 h-4 mr-2" />
-                  Columns
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {table
-                  .getAllColumns()
-                  .filter((c) => c.getCanHide())
-                  .map((column) => (
-                    <DropdownMenuCheckboxItem
-                      key={column.id}
-                      className="capitalize"
-                      checked={column.getIsVisible()}
-                      onCheckedChange={(v) => column.toggleVisibility(!!v)}
-                    >
-                      {column.id}
-                    </DropdownMenuCheckboxItem>
-                  ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+          <TableToolbar
+            table={table}
+            globalFilter={globalFilter}
+            onGlobalFilterChange={setGlobalFilter}
+            searchPlaceholder="Search types..."
+            showColumnVisibility={true}
+          />
 
-          {/* Table — desktop */}
-          <div className="hidden md:block rounded-md border">
-            <Table>
-              <TableHeader>
-                {table.getHeaderGroups().map((hg) => (
-                  <TableRow key={hg.id}>
-                    {hg.headers.map((header) => (
-                      <TableHead key={header.id}>
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableHeader>
-              <TableBody>
-                {table.getRowModel().rows.length ? (
-                  table.getRowModel().rows.map((row) => (
-                    <TableRow key={row.id}>
-                      {row.getVisibleCells().map((cell) => (
-                        <TableCell key={cell.id}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={columns.length} className="text-center text-muted-foreground py-8">
-                      No transaction types found.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
-
-          {/* Card list — mobile */}
-          <div className="flex flex-col gap-3 md:hidden">
-            {table.getRowModel().rows.length ? (
-              table.getRowModel().rows.map((row) => {
-                const t = row.original
-                return (
-                  <div key={t.id} className="rounded-lg border bg-card p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <ArrowLeftRight className="w-4 h-4 text-muted-foreground shrink-0" />
-                        <span className="font-medium truncate">{t.name}</span>
-                      </div>
-                      <RoleGate {...access} requireAdmin>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <EditTxTypeDialog txType={t} existingNames={existingNames} onSuccess={refresh} />
-                          <DeleteDialog
-                            title="Archive Transaction Type"
-                            description={<>Archive <strong>{t.name}</strong>? It can be restored later.</>}
-                            disabled={t.transactionCount > 0}
-                            disabledReason={t.transactionCount > 0 ? `Has ${t.transactionCount} transaction(s).` : undefined}
-                            onConfirm={async () => { await softDeleteTransactionType({ data: { id: t.id } }); refresh() }}
-                          />
-                        </div>
-                      </RoleGate>
-                    </div>
-                    {t.description && <p className="text-sm text-muted-foreground">{t.description}</p>}
-                    {t.pairedWith && (
-                      <p className="text-xs text-muted-foreground">
-                        Paired: <Badge variant="secondary" className="ml-1">{t.pairedWith}</Badge>
-                      </p>
-                    )}
-                    <div className="flex items-center justify-between">
-                      {t.isActive
-                        ? <Badge variant="default">Active</Badge>
-                        : <Badge variant="secondary">Inactive</Badge>}
-                      <Badge variant="outline">{t.transactionCount} transactions</Badge>
-                    </div>
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(t.createdAt).toLocaleDateString('en-IN')}
-                    </span>
+          <DataTable
+            table={table}
+            columns={columns}
+            emptyMessage="No transaction types found."
+            mobileCard={(t) => (
+              <div className="rounded-lg border bg-card p-4 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <ArrowLeftRight className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <span className="font-medium truncate">{t.name}</span>
                   </div>
-                )
-              })
-            ) : (
-              <p className="text-center text-muted-foreground py-8 text-sm">No transaction types found.</p>
+                  <RoleGate {...access} requireAdmin>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <EditTxTypeDialog txType={t} existingNames={existingNames} onSuccess={refresh} />
+                      <DeleteDialog
+                        title="Archive Transaction Type"
+                        description={<>Archive <strong>{t.name}</strong>? It can be restored later.</>}
+                        disabled={t.transactionCount > 0}
+                        disabledReason={t.transactionCount > 0 ? `Has ${t.transactionCount} transaction(s).` : undefined}
+                        onConfirm={async () => { await softDeleteTransactionType({ data: { id: t.id } }); refresh() }}
+                      />
+                    </div>
+                  </RoleGate>
+                </div>
+                {t.description && <p className="text-sm text-muted-foreground">{t.description}</p>}
+                {t.pairedWith && (
+                  <p className="text-xs text-muted-foreground">
+                    Paired: <Badge variant="secondary" className="ml-1">{t.pairedWith}</Badge>
+                  </p>
+                )}
+                <div className="flex items-center justify-between">
+                  {t.isActive
+                    ? <Badge variant="default">Active</Badge>
+                    : <Badge variant="secondary">Inactive</Badge>}
+                  <Badge variant="outline">{t.transactionCount} transactions</Badge>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {new Date(t.createdAt).toLocaleDateString('en-IN')}
+                </span>
+              </div>
             )}
-          </div>
-
-          {/* Pagination */}
-          <div className="flex items-center justify-between pt-2">
-            <p className="text-sm text-muted-foreground">
-              Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-            </p>
-            <div className="flex items-center gap-1">
-              <Button variant="outline" size="sm" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
-                <ChevronLeft className="w-4 h-4" />
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
-                <ChevronRight className="w-4 h-4" />
-              </Button>
-            </div>
-          </div>
+          />
         </CardContent>
       </Card>
     </div>

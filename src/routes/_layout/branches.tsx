@@ -1,5 +1,4 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
-import { ExportButton } from '@/components/shared/ExportButton'
 import { createServerFn } from '@tanstack/react-start'
 import { useState, useMemo } from 'react'
 import {
@@ -8,7 +7,6 @@ import {
   getSortedRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
-  flexRender,
   type ColumnDef,
   type SortingState,
   type VisibilityState,
@@ -18,9 +16,13 @@ import { adminMiddleware } from '#/middleware/admin'
 import { authMiddleware } from '#/middleware/auth'
 import { extractAccess } from '#/lib/rbac'
 import { logAudit } from '#/lib/logger'
+import { checkUniqueName, softDeleteRecord, restoreRecord, permanentDeleteRecord } from '#/lib/crud-helpers'
 import { RoleGate } from '@/components/shared/RoleGate'
 import { DeleteDialog } from '@/components/shared/DeleteDialog'
 import { ArchivedRecordsDrawer, type ArchivedRecord } from '@/components/shared/ArchivedRecordsDrawer'
+import { SortableHeader } from '@/components/shared/SortableHeader'
+import { DataTable } from '@/components/shared/DataTable'
+import { TableToolbar } from '@/components/shared/TableToolbar'
 import { getErrorMessage } from '@/lib/utils'
 import { Unauthorized } from '@/components/shared/Unauthorized'
 import { Button } from '@/components/ui/button'
@@ -45,29 +47,9 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import {
   Loader2,
   PlusCircle,
   Pencil,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
-  ChevronLeft,
-  ChevronRight,
-  SlidersHorizontal,
   Building2,
   Users,
 } from 'lucide-react'
@@ -87,7 +69,7 @@ type BranchRow = {
 
 const branchSchema = z.object({
   name:    z.string().trim().min(2, 'Name must be at least 2 characters'),
-  address: z.string().optional(),
+  address: z.string().trim().optional(),
 })
 
 type BranchInput = z.infer<typeof branchSchema>
@@ -133,10 +115,9 @@ const createBranch = createServerFn({ method: 'POST' })
     return parsed.data
   })
   .handler(async ({ data, context }) => {
-    const existing = await db.branch.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, deletedAt: null },
+    await checkUniqueName(db.branch, data.name, {
+      errorMessage: 'Unable to save branch. The name may already be in use.',
     })
-    if (existing) throw new Error('A branch with this name already exists.')
 
     const branch = await db.branch.create({
       data: { name: data.name, address: data.address ?? null },
@@ -154,10 +135,10 @@ const updateBranch = createServerFn({ method: 'POST' })
     return { ...parsed.data, id: data.id }
   })
   .handler(async ({ data, context }) => {
-    const existing = await db.branch.findFirst({
-      where: { name: { equals: data.name, mode: 'insensitive' }, NOT: { id: data.id }, deletedAt: null },
+    await checkUniqueName(db.branch, data.name, {
+      excludeId: data.id,
+      errorMessage: 'Unable to save branch. The name may already be in use.',
     })
-    if (existing) throw new Error('A branch with this name already exists.')
 
     const old = await db.branch.findUnique({ where: { id: data.id } })
     await db.branch.update({
@@ -173,26 +154,11 @@ const softDeleteBranch = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
   .handler(async ({ data, context }) => {
-    const [userCount, transactionCount, batchCount] = await Promise.all([
-      db.userRole.count({ where: { branchId: data.id } }),
-      db.transaction.count({ where: { branchId: data.id } }),
-      db.uploadBatch.count({ where: { branchId: data.id } }),
-    ])
-
-    if (userCount > 0)
-      throw new Error(`Cannot archive — ${userCount} user(s) are assigned to this branch.`)
-    if (transactionCount > 0)
-      throw new Error(`Cannot archive — ${transactionCount} transaction(s) reference this branch.`)
-    if (batchCount > 0)
-      throw new Error(`Cannot archive — ${batchCount} upload batch(es) reference this branch.`)
-
-    const old = await db.branch.findUnique({ where: { id: data.id } })
-    await db.branch.update({
-      where: { id: data.id },
-      data: { deletedAt: new Date(), deletedBy: context.user.email },
-    })
-
-    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'branches', resourceId: data.id, oldValue: old ? { name: old.name } : undefined }).catch(() => {})
+    await softDeleteRecord(db.branch, data.id, [
+      { model: db.userRole, where: { branchId: data.id }, errorTemplate: 'Cannot archive — {count} user(s) are assigned to this branch.' },
+      { model: db.transaction, where: { branchId: data.id }, errorTemplate: 'Cannot archive — {count} transaction(s) reference this branch.' },
+      { model: db.uploadBatch, where: { branchId: data.id }, errorTemplate: 'Cannot archive — {count} upload batch(es) reference this branch.' },
+    ], { userId: context.user.id, userEmail: context.user.email }, 'branches')
     return { success: true }
   })
 
@@ -200,20 +166,7 @@ const restoreBranch = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
   .handler(async ({ data, context }) => {
-    const branch = await db.branch.findUnique({ where: { id: data.id } })
-
-    // Check if name conflicts with an active branch
-    const conflict = await db.branch.findFirst({
-      where: { name: { equals: branch?.name, mode: 'insensitive' }, deletedAt: null },
-    })
-    if (conflict) throw new Error(`A branch named "${branch?.name}" already exists. Rename it before restoring.`)
-
-    await db.branch.update({
-      where: { id: data.id },
-      data: { deletedAt: null, deletedBy: null },
-    })
-
-    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'update', resource: 'branches', resourceId: data.id, newValue: { restored: true } }).catch(() => {})
+    await restoreRecord(db.branch, data.id, { userId: context.user.id, userEmail: context.user.email }, 'branches')
     return { success: true }
   })
 
@@ -221,9 +174,7 @@ const permanentDeleteBranch = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .inputValidator((data: { id: string }) => data)
   .handler(async ({ data, context }) => {
-    const old = await db.branch.findUnique({ where: { id: data.id } })
-    await db.branch.delete({ where: { id: data.id } })
-    logAudit({ userId: context.user.id, userEmail: context.user.email, action: 'delete', resource: 'branches', resourceId: data.id, oldValue: old ? { name: old.name, permanentDelete: true } : undefined }).catch(() => {})
+    await permanentDeleteRecord(db.branch, data.id, { userId: context.user.id, userEmail: context.user.email }, 'branches')
     return { success: true }
   })
 
@@ -408,14 +359,7 @@ function BranchesPage() {
     () => [
       {
         accessorKey: 'name',
-        header: ({ column }) => (
-          <Button variant="ghost" size="sm" className="-ml-3" onClick={() => column.toggleSorting()}>
-            Name
-            {column.getIsSorted() === 'asc' ? <ArrowUp className="ml-2 w-3 h-3" />
-              : column.getIsSorted() === 'desc' ? <ArrowDown className="ml-2 w-3 h-3" />
-              : <ArrowUpDown className="ml-2 w-3 h-3" />}
-          </Button>
-        ),
+        header: ({ column }) => <SortableHeader column={column} label="Name" />,
         cell: ({ row }) => (
           <div className="flex items-center gap-2">
             <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -436,14 +380,7 @@ function BranchesPage() {
       },
       {
         accessorKey: 'userCount',
-        header: ({ column }) => (
-          <Button variant="ghost" size="sm" className="-ml-3" onClick={() => column.toggleSorting()}>
-            Users
-            {column.getIsSorted() === 'asc' ? <ArrowUp className="ml-2 w-3 h-3" />
-              : column.getIsSorted() === 'desc' ? <ArrowDown className="ml-2 w-3 h-3" />
-              : <ArrowUpDown className="ml-2 w-3 h-3" />}
-          </Button>
-        ),
+        header: ({ column }) => <SortableHeader column={column} label="Users" />,
         cell: ({ row }) => {
           const count = row.getValue('userCount') as number
           return (
@@ -456,14 +393,7 @@ function BranchesPage() {
       },
       {
         accessorKey: 'createdAt',
-        header: ({ column }) => (
-          <Button variant="ghost" size="sm" className="-ml-3" onClick={() => column.toggleSorting()}>
-            Created
-            {column.getIsSorted() === 'asc' ? <ArrowUp className="ml-2 w-3 h-3" />
-              : column.getIsSorted() === 'desc' ? <ArrowDown className="ml-2 w-3 h-3" />
-              : <ArrowUpDown className="ml-2 w-3 h-3" />}
-          </Button>
-        ),
+        header: ({ column }) => <SortableHeader column={column} label="Created" />,
         cell: ({ row }) => (
           <span className="text-muted-foreground text-sm">
             {new Date(row.getValue('createdAt')).toLocaleDateString('en-IN')}
@@ -540,145 +470,61 @@ function BranchesPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 pt-0">
-          {/* Toolbar */}
-          <div className="flex items-center gap-3">
-            <Input
-              placeholder="Search branches..."
-              value={globalFilter}
-              onChange={(e) => setGlobalFilter(e.target.value)}
-              className="flex-1 md:max-w-sm"
-            />
-            <ExportButton
-              filename="branches"
-              sheetName="Branches"
-              data={table.getFilteredRowModel().rows.map((r) => ({
-                Name: r.original.name,
-                Address: r.original.address ?? '',
-                Users: r.original.userCount,
-                Created: new Date(r.original.createdAt).toLocaleDateString('en-IN'),
-              }))}
-            />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="hidden md:flex shrink-0">
-                  <SlidersHorizontal className="w-4 h-4 mr-2" />
-                  Columns
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {table
-                  .getAllColumns()
-                  .filter((c) => c.getCanHide())
-                  .map((column) => (
-                    <DropdownMenuCheckboxItem
-                      key={column.id}
-                      className="capitalize"
-                      checked={column.getIsVisible()}
-                      onCheckedChange={(v) => column.toggleVisibility(!!v)}
-                    >
-                      {column.id}
-                    </DropdownMenuCheckboxItem>
-                  ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+          <TableToolbar
+            table={table}
+            globalFilter={globalFilter}
+            onGlobalFilterChange={setGlobalFilter}
+            searchPlaceholder="Search branches..."
+            exportFilename="branches"
+            exportSheetName="Branches"
+            exportData={table.getFilteredRowModel().rows.map((r) => ({
+              Name: r.original.name,
+              Address: r.original.address ?? '',
+              Users: r.original.userCount,
+              Created: new Date(r.original.createdAt).toLocaleDateString('en-IN'),
+            }))}
+          />
 
-          {/* Table — desktop */}
-          <div className="hidden md:block rounded-md border">
-            <Table>
-              <TableHeader>
-                {table.getHeaderGroups().map((hg) => (
-                  <TableRow key={hg.id}>
-                    {hg.headers.map((header) => (
-                      <TableHead key={header.id}>
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableHeader>
-              <TableBody>
-                {table.getRowModel().rows.length ? (
-                  table.getRowModel().rows.map((row) => (
-                    <TableRow key={row.id}>
-                      {row.getVisibleCells().map((cell) => (
-                        <TableCell key={cell.id}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={columns.length} className="text-center py-10 text-muted-foreground">
-                      No branches found.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
-
-          {/* Card list — mobile */}
-          <div className="flex flex-col gap-3 md:hidden">
-            {table.getRowModel().rows.length ? (
-              table.getRowModel().rows.map((row) => {
-                const branch = row.original
-                return (
-                  <div key={branch.id} className="rounded-lg border bg-card p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
-                        <span className="font-medium truncate">{branch.name}</span>
-                      </div>
-                      <RoleGate {...access} requireAdmin>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <EditBranchDialog branch={branch} onSuccess={refresh} />
-                          <DeleteDialog
-                            title="Archive Branch"
-                            description={<>Archive <strong>{branch.name}</strong>? It can be restored later.</>}
-                            disabled={branch.userCount > 0}
-                            disabledReason={branch.userCount > 0 ? `Has ${branch.userCount} assigned user${branch.userCount !== 1 ? 's' : ''}.` : undefined}
-                            onConfirm={async () => { await softDeleteBranch({ data: { id: branch.id } }); refresh() }}
-                          />
-                        </div>
-                      </RoleGate>
-                    </div>
-                    {branch.address
-                      ? <p className="text-sm text-muted-foreground">{branch.address}</p>
-                      : <p className="text-xs text-muted-foreground italic">No address</p>
-                    }
-                    <div className="flex items-center justify-between">
-                      <Badge variant={branch.userCount > 0 ? 'secondary' : 'outline'} className="gap-1">
-                        <Users className="w-3 h-3" />
-                        {branch.userCount} user{branch.userCount !== 1 ? 's' : ''}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(branch.createdAt).toLocaleDateString('en-IN')}
-                      </span>
-                    </div>
+          <DataTable
+            table={table}
+            columns={columns}
+            emptyMessage="No branches found."
+            mobileCard={(branch) => (
+              <div className="rounded-lg border bg-card p-4 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <span className="font-medium truncate">{branch.name}</span>
                   </div>
-                )
-              })
-            ) : (
-              <p className="text-center py-10 text-muted-foreground text-sm">No branches found.</p>
+                  <RoleGate {...access} requireAdmin>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <EditBranchDialog branch={branch} onSuccess={refresh} />
+                      <DeleteDialog
+                        title="Archive Branch"
+                        description={<>Archive <strong>{branch.name}</strong>? It can be restored later.</>}
+                        disabled={branch.userCount > 0}
+                        disabledReason={branch.userCount > 0 ? `Has ${branch.userCount} assigned user${branch.userCount !== 1 ? 's' : ''}.` : undefined}
+                        onConfirm={async () => { await softDeleteBranch({ data: { id: branch.id } }); refresh() }}
+                      />
+                    </div>
+                  </RoleGate>
+                </div>
+                {branch.address
+                  ? <p className="text-sm text-muted-foreground">{branch.address}</p>
+                  : <p className="text-xs text-muted-foreground italic">No address</p>
+                }
+                <div className="flex items-center justify-between">
+                  <Badge variant={branch.userCount > 0 ? 'secondary' : 'outline'} className="gap-1">
+                    <Users className="w-3 h-3" />
+                    {branch.userCount} user{branch.userCount !== 1 ? 's' : ''}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(branch.createdAt).toLocaleDateString('en-IN')}
+                  </span>
+                </div>
+              </div>
             )}
-          </div>
-
-          {/* Pagination */}
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">
-              Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-            </p>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
-                <ChevronLeft className="w-4 h-4" />
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
-                <ChevronRight className="w-4 h-4" />
-              </Button>
-            </div>
-          </div>
+          />
         </CardContent>
       </Card>
     </div>

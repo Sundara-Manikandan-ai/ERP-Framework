@@ -23,7 +23,9 @@ import { Route as LayoutProfileRouteImport } from './routes/_layout/profile'
 import { Route as LayoutProductsRouteImport } from './routes/_layout/products'
 import { Route as LayoutPagesRouteImport } from './routes/_layout/pages'
 import { Route as LayoutFactoriesRouteImport } from './routes/_layout/factories'
+import { Route as LayoutErrorLogsRouteImport } from './routes/_layout/error-logs'
 import { Route as LayoutBranchesRouteImport } from './routes/_layout/branches'
+import { Route as LayoutAuditLogsRouteImport } from './routes/_layout/audit-logs'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
 const RegisterRoute = RegisterRouteImport.update({
@@ -95,9 +97,19 @@ const LayoutFactoriesRoute = LayoutFactoriesRouteImport.update({
   path: '/factories',
   getParentRoute: () => LayoutRouteRoute,
 } as any)
+const LayoutErrorLogsRoute = LayoutErrorLogsRouteImport.update({
+  id: '/error-logs',
+  path: '/error-logs',
+  getParentRoute: () => LayoutRouteRoute,
+} as any)
 const LayoutBranchesRoute = LayoutBranchesRouteImport.update({
   id: '/branches',
   path: '/branches',
+  getParentRoute: () => LayoutRouteRoute,
+} as any)
+const LayoutAuditLogsRoute = LayoutAuditLogsRouteImport.update({
+  id: '/audit-logs',
+  path: '/audit-logs',
   getParentRoute: () => LayoutRouteRoute,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
@@ -110,7 +122,9 @@ export interface FileRoutesByFullPath {
   '/': typeof LayoutIndexRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/audit-logs': typeof LayoutAuditLogsRoute
   '/branches': typeof LayoutBranchesRoute
+  '/error-logs': typeof LayoutErrorLogsRoute
   '/factories': typeof LayoutFactoriesRoute
   '/pages': typeof LayoutPagesRoute
   '/products': typeof LayoutProductsRoute
@@ -126,7 +140,9 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/audit-logs': typeof LayoutAuditLogsRoute
   '/branches': typeof LayoutBranchesRoute
+  '/error-logs': typeof LayoutErrorLogsRoute
   '/factories': typeof LayoutFactoriesRoute
   '/pages': typeof LayoutPagesRoute
   '/products': typeof LayoutProductsRoute
@@ -145,7 +161,9 @@ export interface FileRoutesById {
   '/_layout': typeof LayoutRouteRouteWithChildren
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/_layout/audit-logs': typeof LayoutAuditLogsRoute
   '/_layout/branches': typeof LayoutBranchesRoute
+  '/_layout/error-logs': typeof LayoutErrorLogsRoute
   '/_layout/factories': typeof LayoutFactoriesRoute
   '/_layout/pages': typeof LayoutPagesRoute
   '/_layout/products': typeof LayoutProductsRoute
@@ -165,7 +183,9 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/register'
+    | '/audit-logs'
     | '/branches'
+    | '/error-logs'
     | '/factories'
     | '/pages'
     | '/products'
@@ -181,7 +201,9 @@ export interface FileRouteTypes {
   to:
     | '/login'
     | '/register'
+    | '/audit-logs'
     | '/branches'
+    | '/error-logs'
     | '/factories'
     | '/pages'
     | '/products'
@@ -199,7 +221,9 @@ export interface FileRouteTypes {
     | '/_layout'
     | '/login'
     | '/register'
+    | '/_layout/audit-logs'
     | '/_layout/branches'
+    | '/_layout/error-logs'
     | '/_layout/factories'
     | '/_layout/pages'
     | '/_layout/products'
@@ -321,11 +345,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutFactoriesRouteImport
       parentRoute: typeof LayoutRouteRoute
     }
+    '/_layout/error-logs': {
+      id: '/_layout/error-logs'
+      path: '/error-logs'
+      fullPath: '/error-logs'
+      preLoaderRoute: typeof LayoutErrorLogsRouteImport
+      parentRoute: typeof LayoutRouteRoute
+    }
     '/_layout/branches': {
       id: '/_layout/branches'
       path: '/branches'
       fullPath: '/branches'
       preLoaderRoute: typeof LayoutBranchesRouteImport
+      parentRoute: typeof LayoutRouteRoute
+    }
+    '/_layout/audit-logs': {
+      id: '/_layout/audit-logs'
+      path: '/audit-logs'
+      fullPath: '/audit-logs'
+      preLoaderRoute: typeof LayoutAuditLogsRouteImport
       parentRoute: typeof LayoutRouteRoute
     }
     '/api/auth/$': {
@@ -339,7 +377,9 @@ declare module '@tanstack/react-router' {
 }
 
 interface LayoutRouteRouteChildren {
+  LayoutAuditLogsRoute: typeof LayoutAuditLogsRoute
   LayoutBranchesRoute: typeof LayoutBranchesRoute
+  LayoutErrorLogsRoute: typeof LayoutErrorLogsRoute
   LayoutFactoriesRoute: typeof LayoutFactoriesRoute
   LayoutPagesRoute: typeof LayoutPagesRoute
   LayoutProductsRoute: typeof LayoutProductsRoute
@@ -354,7 +394,9 @@ interface LayoutRouteRouteChildren {
 }
 
 const LayoutRouteRouteChildren: LayoutRouteRouteChildren = {
+  LayoutAuditLogsRoute: LayoutAuditLogsRoute,
   LayoutBranchesRoute: LayoutBranchesRoute,
+  LayoutErrorLogsRoute: LayoutErrorLogsRoute,
   LayoutFactoriesRoute: LayoutFactoriesRoute,
   LayoutPagesRoute: LayoutPagesRoute,
   LayoutProductsRoute: LayoutProductsRoute,

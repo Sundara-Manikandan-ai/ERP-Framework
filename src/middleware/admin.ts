@@ -9,5 +9,5 @@ export const adminMiddleware = createMiddleware()
       throw redirect({ to: '/' })
     }
 
-    return await next({ context:{user: context.user} })
+    return await next()
   })

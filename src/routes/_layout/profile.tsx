@@ -71,7 +71,7 @@ const updateProfile = createServerFn({ method: 'POST' })
     const existing = await db.user.findFirst({
       where: { email: data.email, NOT: { id: context.user.id } },
     })
-    if (existing) throw new Error('This email is already in use.')
+    if (existing) throw new Error('Unable to update profile. The email may already be in use.')
 
     await db.user.update({
       where: { id: context.user.id },
