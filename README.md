@@ -1,193 +1,88 @@
-Welcome to your new TanStack Start app! 
+# MIS Enterprise
 
-# Getting Started
+Full-stack enterprise management system for multi-branch business operations.
 
-To run this application:
+## Tech Stack
 
-```bash
-npm install
-npm run dev
-```
+| Layer | Technology |
+|-------|-----------|
+| Framework | TanStack Start (React 19, Vite 7, TanStack Router/Query/Table) |
+| Database | Prisma 7 + PostgreSQL |
+| Auth | Better Auth |
+| Styling | Tailwind CSS 4 + Radix UI (shadcn) |
+| Validation | Zod |
 
-# Building For Production
+## Features
 
-To build this application for production:
+- Multi-branch and factory management
+- Role-based access control with granular page permissions
+- Hierarchical product categories
+- Transaction tracking with bulk upload (Excel/CSV)
+- Audit logging and error tracking
+- Export to Excel/CSV
+- Responsive design with mobile views
 
-```bash
-npm run build
-```
+## Getting Started
 
-## Testing
+### Prerequisites
 
-This project uses [Vitest](https://vitest.dev/) for testing. You can run the tests with:
+- Node.js 20+
+- PostgreSQL database
 
-```bash
-npm run test
-```
+### Setup
 
-## Styling
+1. Clone the repo:
+   ```bash
+   git clone <repo-url>
+   cd mis-enterprise
+   ```
 
-This project uses [Tailwind CSS](https://tailwindcss.com/) for styling.
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
 
-### Removing Tailwind CSS
+3. Copy `.env.example` to `.env` and fill in values:
+   ```bash
+   cp .env.example .env
+   ```
 
-If you prefer not to use Tailwind CSS:
+4. Set up your PostgreSQL database and update `DATABASE_URL` in `.env`.
 
-1. Remove the demo pages in `src/routes/demo/`
-2. Replace the Tailwind import in `src/styles.css` with your own styles
-3. Remove `tailwindcss()` from the plugins array in `vite.config.ts`
-4. Uninstall the packages: `npm install @tailwindcss/vite tailwindcss -D`
+5. Push the schema to the database:
+   ```bash
+   npx prisma db push
+   ```
 
+6. Seed initial data:
+   ```bash
+   npm run seed
+   ```
 
+7. Start the dev server:
+   ```bash
+   npm run dev
+   ```
 
-## Routing
+8. Open http://localhost:3000 and log in with `admin@mis.com` and your `ADMIN_PASSWORD`.
 
-This project uses [TanStack Router](https://tanstack.com/router) with file-based routing. Routes are managed as files in `src/routes`.
+## Environment Variables
 
-### Adding A Route
+See `.env.example` for the full list:
 
-To add a new route to your application just add a new file in the `./src/routes` directory.
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `BETTER_AUTH_SECRET` | Secret key for Better Auth session signing |
+| `BETTER_AUTH_BASE_URL` | Base URL of the app (e.g. `http://localhost:3000`) |
+| `ADMIN_PASSWORD` | Password for the seeded admin account |
 
-TanStack will automatically generate the content of the route file for you.
+## Scripts
 
-Now that you have two routes you can use a `Link` component to navigate between them.
-
-### Adding Links
-
-To use SPA (Single Page Application) navigation you will need to import the `Link` component from `@tanstack/react-router`.
-
-```tsx
-import { Link } from "@tanstack/react-router";
-```
-
-Then anywhere in your JSX you can use it like so:
-
-```tsx
-<Link to="/about">About</Link>
-```
-
-This will create a link that will navigate to the `/about` route.
-
-More information on the `Link` component can be found in the [Link documentation](https://tanstack.com/router/v1/docs/framework/react/api/router/linkComponent).
-
-### Using A Layout
-
-In the File Based Routing setup the layout is located in `src/routes/__root.tsx`. Anything you add to the root route will appear in all the routes. The route content will appear in the JSX where you render `{children}` in the `shellComponent`.
-
-Here is an example layout that includes a header:
-
-```tsx
-import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
-
-export const Route = createRootRoute({
-  head: () => ({
-    meta: [
-      { charSet: 'utf-8' },
-      { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'My App' },
-    ],
-  }),
-  shellComponent: ({ children }) => (
-    <html lang="en">
-      <head>
-        <HeadContent />
-      </head>
-      <body>
-        <header>
-          <nav>
-            <Link to="/">Home</Link>
-            <Link to="/about">About</Link>
-          </nav>
-        </header>
-        {children}
-        <Scripts />
-      </body>
-    </html>
-  ),
-})
-```
-
-More information on layouts can be found in the [Layouts documentation](https://tanstack.com/router/latest/docs/framework/react/guide/routing-concepts#layouts).
-
-## Server Functions
-
-TanStack Start provides server functions that allow you to write server-side code that seamlessly integrates with your client components.
-
-```tsx
-import { createServerFn } from '@tanstack/react-start'
-
-const getServerTime = createServerFn({
-  method: 'GET',
-}).handler(async () => {
-  return new Date().toISOString()
-})
-
-// Use in a component
-function MyComponent() {
-  const [time, setTime] = useState('')
-  
-  useEffect(() => {
-    getServerTime().then(setTime)
-  }, [])
-  
-  return <div>Server time: {time}</div>
-}
-```
-
-## API Routes
-
-You can create API routes by using the `server` property in your route definitions:
-
-```tsx
-import { createFileRoute } from '@tanstack/react-router'
-import { json } from '@tanstack/react-start'
-
-export const Route = createFileRoute('/api/hello')({
-  server: {
-    handlers: {
-      GET: () => json({ message: 'Hello, World!' }),
-    },
-  },
-})
-```
-
-## Data Fetching
-
-There are multiple ways to fetch data in your application. You can use TanStack Query to fetch data from a server. But you can also use the `loader` functionality built into TanStack Router to load the data for a route before it's rendered.
-
-For example:
-
-```tsx
-import { createFileRoute } from '@tanstack/react-router'
-
-export const Route = createFileRoute('/people')({
-  loader: async () => {
-    const response = await fetch('https://swapi.dev/api/people')
-    return response.json()
-  },
-  component: PeopleComponent,
-})
-
-function PeopleComponent() {
-  const data = Route.useLoaderData()
-  return (
-    <ul>
-      {data.results.map((person) => (
-        <li key={person.name}>{person.name}</li>
-      ))}
-    </ul>
-  )
-}
-```
-
-Loaders simplify your data fetching logic dramatically. Check out more information in the [Loader documentation](https://tanstack.com/router/latest/docs/framework/react/guide/data-loading#loader-parameters).
-
-# Demo files
-
-Files prefixed with `demo` can be safely deleted. They are there to provide a starting point for you to play around with the features you've installed.
-
-# Learn More
-
-You can learn more about all of the offerings from TanStack in the [TanStack documentation](https://tanstack.com).
-
-For TanStack Start specific documentation, visit [TanStack Start](https://tanstack.com/start).
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start dev server on port 3000 |
+| `npm run build` | Production build |
+| `npm run preview` | Preview production build |
+| `npm run seed` | Seed database with initial data |
+| `npm run test` | Run tests |
