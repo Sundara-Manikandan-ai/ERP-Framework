@@ -42,7 +42,10 @@
       "Bash(dir /b)",
       "Bash(tsc:*)",
       "Bash(export:*)",
-      "Bash(bash:*)"
+      "Bash(bash:*)",
+      "Bash(ls:*)",
+      "Bash(python3:*)",
+      "Bash(curl:*)"
     ]
   }
 }

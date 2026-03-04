@@ -357,7 +357,7 @@ function FactoriesPage() {
         cell: ({ row }) => (
           <div className="flex items-center gap-2">
             <Factory className="w-4 h-4 text-muted-foreground shrink-0" />
-            <span className="font-medium">{row.getValue('name')}</span>
+            <span>{row.getValue('name')}</span>
           </div>
         ),
       },

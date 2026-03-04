@@ -913,7 +913,7 @@ function UploadPage() {
                           {row.categoryPath}
                         </Badge>
                       </TableCell>
-                      <TableCell className="font-medium text-sm">{row.product}</TableCell>
+                      <TableCell>{row.product}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{row.unit}</TableCell>
                       <TableCell className="text-right text-sm">
                         {row.quantity.toLocaleString('en-IN')}

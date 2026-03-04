@@ -48,7 +48,7 @@ export function DataTable<T>({ table, columns, emptyMessage, mobileCard }: DataT
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={columns.length} className="text-center py-10 text-muted-foreground">
+                <TableCell colSpan={columns.length} className="text-center py-6 text-muted-foreground">
                   {emptyMessage}
                 </TableCell>
               </TableRow>

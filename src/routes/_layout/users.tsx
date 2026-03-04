@@ -501,7 +501,7 @@ function UsersPage() {
       {
         accessorKey: 'name',
         header: ({ column }) => <SortableHeader column={column} label="Name" />,
-        cell: ({ row }) => <span className="font-medium">{row.getValue('name')}</span>,
+        cell: ({ row }) => <span>{row.getValue('name')}</span>,
       },
       {
         accessorKey: 'email',

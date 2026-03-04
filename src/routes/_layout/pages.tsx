@@ -900,7 +900,7 @@ function PagesPage() {
                 <Icon className="w-3.5 h-3.5 text-muted-foreground" />
               </div>
               <div className="min-w-0">
-                <p className="font-medium text-sm">{row.getValue('label')}</p>
+                <p>{row.getValue('label')}</p>
                 <p className="text-xs text-muted-foreground font-mono">{row.original.path}</p>
               </div>
             </div>

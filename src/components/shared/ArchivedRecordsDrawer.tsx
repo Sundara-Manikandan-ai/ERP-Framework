@@ -134,7 +134,7 @@ export function ArchivedRecordsDrawer({
                     {records.map((record) => (
                       <TableRow key={record.id}>
                         <TableCell>
-                          <p className="font-medium">{record.name}</p>
+                          <p>{record.name}</p>
                           {record.extra && (
                             <p className="text-xs text-muted-foreground">{record.extra}</p>
                           )}
