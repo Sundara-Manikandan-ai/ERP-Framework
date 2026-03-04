@@ -1,4 +1,4 @@
-# MIS Enterprise
+# ERP Framework
 
 Full-stack enterprise management system for multi-branch business operations.
 
